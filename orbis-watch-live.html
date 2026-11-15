@@ -162,6 +162,11 @@ button.agi{cursor:pointer}button.agi:hover{background:rgba(255,255,255,.04)}
 #card header .fav{position:absolute;top:10px;right:42px;width:26px;height:26px;border:1px solid var(--line);border-radius:4px;background:transparent;color:#ffd84f;font-size:14px;line-height:1;cursor:pointer;padding:0}
 #card header .t{padding-right:64px}
 #card header .fav[aria-pressed="true"]{background:rgba(255,216,79,.12)}
+#gmap{position:absolute;inset:0;z-index:0}
+body.gm #base{background:transparent}
+body.gm #base,body.gm #over{pointer-events:none}
+body.gm3 #base,body.gm3 #over,body.gm #tileattr{display:none}
+body.gm #rainattr{z-index:4}
 </style>
 
 </head><body>
@@ -188,10 +193,13 @@ button.agi{cursor:pointer}button.agi:hover{background:rgba(255,255,255,.04)}
     <div class="seg" role="group" aria-label="表示モード">
       <button id="m3d" aria-pressed="true">3D 地球儀</button>
       <button id="m2d" aria-pressed="false">2D 地図</button>
+      <button id="mG2" aria-pressed="false" title="Google の地図・航空写真に全レイヤーを重ねる">Google 地図</button>
+      <button id="mG3" aria-pressed="false" title="Google の立体の地球">Google 3D</button>
     </div>
   </div>
 
   <div class="stage" id="stage">
+    <div id="gmap" hidden></div>
     <canvas id="base"></canvas>
     <canvas id="over" aria-label="世界地図。ドラッグで回転、ホイールやピンチで拡大"></canvas>
 
@@ -204,6 +212,9 @@ button.agi{cursor:pointer}button.agi:hover{background:rgba(255,255,255,.04)}
         <div class="seg" role="group" aria-label="ニュースの種類" id="newsmode" style="margin:2px 12px 10px;display:flex"><button data-n="world" aria-pressed="true" style="flex:1">世界</button><button data-n="ja" aria-pressed="false" style="flex:1">日本語</button><button data-n="bbc" aria-pressed="false" style="flex:1">BBC</button></div>
         <h2 style="border-top:1px solid var(--line);margin-top:6px;padding-top:12px">ベースマップ</h2>
         <div class="seg" role="group" aria-label="ベースマップ" id="basemaps" style="margin:2px 12px 10px;display:flex"><button data-b="dark" aria-pressed="true" style="flex:1">ダーク</button><button data-b="ocean" aria-pressed="false" style="flex:1">海図</button><button data-b="light" aria-pressed="false" style="flex:1">ライト</button></div>
+        <h2 style="margin-top:2px;padding-top:4px;font-size:10.5px">詳細な地図（拡大すると道路・建物まで）</h2>
+        <div class="seg" role="group" aria-label="詳細な地図" id="tilemodes" style="margin:2px 12px 10px;display:flex;flex-wrap:wrap"><button data-t="road" style="flex:1">道路（暗）</button><button data-t="photo" style="flex:1">航空写真</button><button data-t="roadl" style="flex:1">道路（明）</button><button data-t="none" style="flex:1">なし</button></div>
+        <div style="padding:0 12px 10px"><button class="btn" id="gmset" style="width:100%">Google マップのキーを設定</button></div>
         <label style="display:flex;gap:8px;align-items:center;padding:0 12px 10px;font-size:12px;cursor:pointer"><input type="checkbox" id="nightchk" checked> 昼夜の境界を表示</label>
         <h2 style="border-top:1px solid var(--line);margin-top:6px;padding-top:12px">収束地点 · Convergences</h2>
         <div id="convs"></div>
@@ -212,6 +223,7 @@ button.agi{cursor:pointer}button.agi:hover{background:rgba(255,255,255,.04)}
     </aside>
 
     <section class="card" id="card" hidden aria-live="polite"></section>
+    <div id="tileattr" hidden style="position:absolute;left:10px;bottom:6px;z-index:3;font:10px var(--f-mono);color:var(--muted);background:rgba(11,17,24,.7);padding:2px 6px;border-radius:3px"></div>
     <div id="tslide" hidden role="group" aria-label="時間スライダー"><div style="display:flex;align-items:center;gap:8px"><b style="font:600 10px var(--f-mono);color:var(--signal)">TIME</b><span id="tslab" style="flex:1;font-size:11.5px"></span><button class="btn" id="tslive" style="font-size:11px;padding:3px 8px">ライブ</button><button class="x" id="tsx" aria-label="閉じる" style="position:static">✕</button></div><input type="range" id="tsr" min="0" max="168" step="1" value="168" aria-label="表示する時刻（過去7日〜いま）" style="width:100%"><div style="display:flex;justify-content:space-between;font:10px var(--f-mono);color:var(--muted)"><span>7日前</span><span>3日前</span><span>いま</span></div></div>
     <a id="rainattr" hidden href="https://www.rainviewer.com/" target="_blank" rel="noopener" style="position:absolute;right:10px;top:var(--rattr,8px);z-index:3;font:10px var(--f-mono);color:var(--muted);background:rgba(11,17,24,.7);padding:2px 6px;border-radius:3px;text-decoration:none">Weather data by RainViewer</a>
     <div class="toast" id="toast" hidden></div>
@@ -384,24 +396,30 @@ function fit(){
   layout(); drawBase();
 }
 function layout(){
+  if(typeof gmOn==='function'&&gmOn()){ gmSync(); return; }
   if(mode==='3d'){ const R=Math.min(W,H)*0.43*k; ortho.scale(R).translate([W/2,H/2]).rotate(rot); proj=ortho; }
   else { const s=W/(2*Math.PI)*k*1.05; flat.scale(s).translate([W/2+pan[0],H/2+pan[1]]).rotate([rot[0],0,0]); proj=flat; }
 }
 function drawBase(){
   const c=bctx; c.setTransform(DPR,0,0,DPR,0,0); c.clearRect(0,0,W,H);
   const path=d3.geoPath(proj,c);
+  const G2=typeof gmOn==='function'&&gmOn(); if(!G2&&typeof GM!=='undefined'&&GM.on) return;
+  if(!G2){
   c.beginPath(); path({type:'Sphere'}); c.fillStyle=css('--sea'); c.fill();
   c.beginPath(); path(graticule); c.strokeStyle=css('--grid'); c.lineWidth=.7; c.stroke();
   c.beginPath(); path(land); c.fillStyle=css('--land'); c.fill(); c.strokeStyle=css('--land-edge'); c.lineWidth=.8; c.stroke();
+  if(typeof drawTiles==='function') drawTiles(c);
+  } else c.globalAlpha=.4;
   if(on.market && MKT_BY_NUM){ for(const f of COUNTRIES){ const rows=MKT_BY_NUM[String(f.id).padStart(3,'0')]; if(!rows) continue; const ch=d3.mean(rows.filter(r=>r.chg!=null),r=>r.chg); if(ch==null) continue; const a=Math.min(.55,.12+Math.abs(ch)*.18); c.beginPath(); path(f); c.fillStyle=ch>=0?`rgba(98,210,154,${a})`:`rgba(255,93,93,${a})`; c.fill(); } }
+  c.globalAlpha=1;
   if(typeof drawSatImg==='function') drawSatImg(c);
   if(typeof drawRain==='function') drawRain(c);
   if(typeof drawTone==='function') drawTone(c,path);
-  if(NIGHT){ c.beginPath(); path(d3.geoCircle().center(antisun()).radius(90)()); c.fillStyle='rgba(2,6,14,.32)'; c.fill(); }
+  if(NIGHT&&!G2){ c.beginPath(); path(d3.geoCircle().center(antisun()).radius(90)()); c.fillStyle='rgba(2,6,14,.32)'; c.fill(); }
   c.beginPath(); path(borders); c.strokeStyle='rgba(79,195,217,.16)'; c.lineWidth=.6; c.stroke();
   if(CABLES && on.infra){ c.beginPath(); path(CABLES); c.strokeStyle=css('--c-cable'); c.lineWidth=1; c.stroke(); }
   if(selCountry){ c.beginPath(); path(selCountry); c.fillStyle='rgba(79,195,217,.12)'; c.fill(); c.strokeStyle='rgba(79,195,217,.7)'; c.lineWidth=1.2; c.stroke(); }
-  c.beginPath(); path({type:'Sphere'}); c.strokeStyle='rgba(79,195,217,.35)'; c.lineWidth=1; c.stroke();
+  if(!G2){ c.beginPath(); path({type:'Sphere'}); c.strokeStyle='rgba(79,195,217,.35)'; c.lineWidth=1; c.stroke(); }
 }
 function visible(lon,lat){
   if(lat>90) return false;
@@ -530,6 +548,7 @@ over.addEventListener('click',e=>{ const r=over.getBoundingClientRect(); const i
 over.addEventListener('pointermove',e=>{ if(e.pointerType!=='mouse')return; const r=over.getBoundingClientRect(); const it=pick(e.clientX-r.left,e.clientY-r.top); hover=it; over.style.cursor=it?'pointer':''; });
 
 function flyTo(lon,lat,toK){
+  if(typeof gmFly==='function'&&gmFly(lon,lat,toK)) return;
   const from=[...rot], to=[-lon, mode==='3d'?-lat:0, 0]; let d=to[0]-from[0]; d=((d+540)%360)-180; to[0]=from[0]+d;
   const k0=k, k1=toK||Math.max(k,mode==='3d'?2.2:3); const pan0=[...pan];
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -607,7 +626,7 @@ q.addEventListener('input',()=>{ const s=q.value.trim().toLowerCase(); if(!s){re
 document.addEventListener('click',e=>{ if(!e.target.closest('.search')) res.hidden=true; });
 
 // mode
-function setMode(m){ mode=m; $('#m3d').setAttribute('aria-pressed',m==='3d'); $('#m2d').setAttribute('aria-pressed',m==='2d'); k=1; pan=[0,0]; last=d3.zoomIdentity; d3.select(over).property('__zoom',last); layout(); drawBase(); if(selected) flyTo(selected.lon,selected.lat); }
+function setMode(m){ if(typeof gmOff==='function'&&GM.on) gmOff(true); mode=m; document.querySelectorAll('#mG2,#mG3').forEach(b=>b.setAttribute('aria-pressed','false')); $('#m3d').setAttribute('aria-pressed',m==='3d'); $('#m2d').setAttribute('aria-pressed',m==='2d'); k=1; pan=[0,0]; last=d3.zoomIdentity; d3.select(over).property('__zoom',last); layout(); drawBase(); if(selected) flyTo(selected.lon,selected.lat); }
 $('#m3d').onclick=()=>setMode('3d'); $('#m2d').onclick=()=>setMode('2d');
 
 // rail collapse (phone)
@@ -1889,11 +1908,11 @@ function nearPanel(){
   $('#card').innerHTML=`<header><div class="tag" style="color:var(--signal)">NEAR · 現在地の近く</div><h3 class="t">近くで起きていること</h3><div class="coord" id="nrat">位置を確認しています…</div><button class="x" id="close" aria-label="閉じる">✕</button></header><div id="nrbody"><div class="note" style="border:0">位置情報の許可を求める表示が出たら「許可」を押してください。</div></div>`;
   $('#card').hidden=false; $('#close').onclick=()=>{ $('#card').hidden=true; };
   if(!navigator.geolocation){ $('#nrbody').innerHTML=`<div class="note">この端末では位置情報が使えません。「マイ地域」に場所を登録すると、その周りの情報を見られます。</div>`; return; }
-  navigator.geolocation.getCurrentPosition(async pos=>{ MYPOS={lat:pos.coords.latitude,lon:pos.coords.longitude}; nearRender(); flyTo(MYPOS.lon,MYPOS.lat,mode==='3d'?6:8); if(typeof agPatrol==='function') agPatrol().then(nearRender).catch(()=>{});
+  navigator.geolocation.getCurrentPosition(async pos=>{ MYPOS={lat:pos.coords.latitude,lon:pos.coords.longitude}; if(typeof mpSave==='function') mpSave(); nearRender(); flyTo(MYPOS.lon,MYPOS.lat,mode==='3d'?6:8); if(typeof agPatrol==='function') agPatrol().then(nearRender).catch(()=>{});
     try{ const w=await wxHourly({name:'現在地',lat:MYPOS.lat,lon:MYPOS.lon}); const el=$('#nrwx'); if(el) el.textContent=wxSummary(w.rows).text; }catch(e){} },
-    err=>{ const b=$('#nrbody'); if(b) b.innerHTML=`<div class="note">位置情報が使えませんでした（${esc(err.message||'許可されていません')}）。iPhone では「設定」→「プライバシーとセキュリティ」→「位置情報サービス」で Safari を許可してください。</div>`; },{enableHighAccuracy:false,timeout:15000,maximumAge:300000});
+    err=>{ const b=$('#nrbody'); if(b&&MYPOS&&MYPOS.old){ nearRender(); b.insertAdjacentHTML('afterbegin',`<div class=note>いまの位置は取れなかったので、前回の位置で表示しています（${esc(err.message||'許可されていません')}）。</div>`); return; } if(b) b.innerHTML=`<div class="note">位置情報が使えませんでした（${esc(err.message||'許可されていません')}）。iPhone では「設定」→「プライバシーとセキュリティ」→「位置情報サービス」で Safari を許可してください。</div>`; },{enableHighAccuracy:false,timeout:15000,maximumAge:300000});
 }
-function nearRender(){ const b=$('#nrbody'); if(!b||!MYPOS) return; const R=$('#nrr')?+$('#nrr').value:50;
+function nearRender(){ const b=$('#nrbody'); if(!b||!MYPOS) return; const R=$('#nrr')?+$('#nrr').value:((typeof NRS!=='undefined'&&NRS&&NRS.r)||50);
   $('#nrat').textContent=`${MYPOS.lat.toFixed(3)}, ${MYPOS.lon.toFixed(3)} · 半径 ${R} km`;
   const near=items.filter(o=>!NEAR_SKIP.includes(o.layer)&&o.lat!=null&&isFinite(o.lat)&&!(o.layer==='place'&&o.name==='現在地')).map(o=>({o,d:KM(MYPOS,o)})).filter(x=>x.d<=R&&tsOK(x.o));
   const by={}; for(const x of near) (by[x.o.layer]=by[x.o.layer]||[]).push(x);
@@ -1992,6 +2011,219 @@ const _agSec2=agSections; agSections=function(){ const S=_agSec2();
   for(const a of APTS){ const b=APT_BOARD[a.iata]; if(!b) continue; const f=(xs,dir)=>xs.slice(0,3).map(x=>{ const e=routeEnd(x.route,a.iata,dir); return x.cs+(e?`（${e.city}${dir==='from'?'から':'行き'}）`:''); }).join('、');
     add('航空',[{text:`${a.name}：到着中 ${b.A.length} 便${b.A.length?`（${f(b.A,'from')}）`:''}、出発中 ${b.D.length} 便${b.D.length?`（${f(b.D,'to')}）`:''}`,it:items.find(o=>o.key==='apt'+a.icao)||null}]); }
   return S; };
+
+
+/* ================= batch 19: detailed basemap tiles (street map / aerial photo), reprojected onto the globe and flat map ================= */
+var TSRC={
+  road:{url:(z,x,y)=>`https://${'abcd'[(x+y)%4]}.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png`,max:19,attr:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'},
+  roadl:{url:(z,x,y)=>`https://${'abcd'[(x+y)%4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,max:19,attr:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'},
+  photo:{url:(z,x,y)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,max:18,attr:'Powered by <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a> · Esri, Maxar, Earthstar Geographics'}
+};
+var TMODE=(()=>{ try{ const v=localStorage.getItem('ow_tiles'); if(v==='none'||TSRC[v]) return v; }catch(e){} return 'road'; })();
+var TC={tiles:new Map(), key:'', cv:null, tm:0, z:0, want:new Set()};
+function tileZoom(){ const ppd=proj.scale()*Math.PI/180; return Math.max(2,Math.min(TSRC[TMODE].max,Math.round(Math.log2(ppd*360/256*(window.devicePixelRatio>1?1.4:1))))); }
+function tileSet(z){ const n=1<<z, set=new Set(), D=Math.PI/180, tr=proj.translate(), R2=Math.pow(proj.scale(),2), step=Math.max(24,Math.min(W,H)/14);
+  for(let py=0;py<=H+step;py+=step) for(let px=0;px<=W+step;px+=step){ const X=Math.min(px,W-1), Y=Math.min(py,H-1);
+    if(mode==='3d'&&(X-tr[0])**2+(Y-tr[1])**2>R2) continue; const ll=proj.invert([X,Y]); if(!ll||!isFinite(ll[0])||!isFinite(ll[1])) continue;
+    const lat=Math.max(-85,Math.min(85,ll[1])), lon=((ll[0]+540)%360)-180;
+    const tx=Math.floor((lon+180)/360*n), ty=Math.floor((1-Math.log(Math.tan(Math.PI/4+lat*D/2))/Math.PI)/2*n);
+    for(const dx of [-1,0,1]) for(const dy of [-1,0,1]){ const xx=((tx+dx)%n+n)%n, yy=ty+dy; if(yy>=0&&yy<n) set.add(`${z}/${xx}/${yy}`); } }
+  return set; }
+function tileGet(id){ let t=TC.tiles.get(id); if(t) return t; const [z,x,y]=id.split('/').map(Number); t={st:0,data:null};
+  TC.tiles.set(id,t); const im=new Image(); im.crossOrigin='anonymous'; im.decoding='async';
+  im.onload=()=>{ try{ const cv=document.createElement('canvas'); cv.width=cv.height=256; const cx=cv.getContext('2d',{willReadFrequently:true}); cx.drawImage(im,0,0,256,256); t.data=cx.getImageData(0,0,256,256).data; t.st=1; }catch(e){ t.st=-1; } TC.key=''; clearTimeout(TC.tm); TC.tm=setTimeout(()=>drawBase(),120); };
+  im.onerror=()=>{ t.st=-1; }; im.src=TSRC[TMODE].url(z,x,y);
+  if(TC.tiles.size>600){ for(const k0 of TC.tiles.keys()){ if(TC.tiles.size<=450) break; if(!TC.want.has(k0)) TC.tiles.delete(k0); } }
+  return t; }
+function tileKey(){ return TMODE+'|'+rainKey(); }
+function drawTiles(c){ if(!TSRC||!TC||!TMODE) return;
+  const at=$('#tileattr'); if(at){ at.hidden=TMODE==='none'; if(TMODE!=='none') at.innerHTML=TSRC[TMODE].attr; }
+  if(TMODE==='none') return; const key=tileKey();
+  if(TC.cv&&TC.key===key){ c.drawImage(TC.cv,0,0,W,H); return; }
+  if(TC.cv&&TC.last) c.drawImage(TC.cv,0,0,W,H); // keep the previous picture while moving
+  clearTimeout(TC.bt); TC.bt=setTimeout(()=>{ if(tileKey()!==key) return; buildTiles(key); drawBase(); },160);
+}
+function buildTiles(key){
+  let z=tileZoom(); let set=tileSet(z); while(set.size>90&&z>2){ z--; set=tileSet(z); } TC.z=z; TC.want=set;
+  for(const id of set) tileGet(id);
+  const st=W*H>500000?1.5:1, w=Math.ceil(W/st), h=Math.ceil(H/st), n=1<<z, D=Math.PI/180;
+  const cv=TC.cv&&TC.cv.width===w&&TC.cv.height===h?TC.cv:document.createElement('canvas'); cv.width=w; cv.height=h;
+  const cx=cv.getContext('2d'), out=cx.createImageData(w,h), o=out.data; const tr=proj.translate(), R2=Math.pow(proj.scale()*0.998,2), ctr=[-rot[0],-rot[1]];
+  // parents as fallback while the exact zoom is loading
+  const look=(zz,gx,gy)=>{ for(let up=0;up<=4&&zz-up>=2;up++){ const s=1<<up, X=Math.floor(gx/s), Y=Math.floor(gy/s), t=TC.tiles.get(`${zz-up}/${X>>8}/${Y>>8}`); if(t&&t.st===1) return [t.data,((Y&255)*256+(X&255))*4]; } return null; };
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+    const px=x*st+st/2, py=y*st+st/2; if(mode==='3d'&&(px-tr[0])**2+(py-tr[1])**2>R2) continue;
+    const ll=proj.invert([px,py]); if(!ll||!isFinite(ll[0])||!isFinite(ll[1])) continue; if(mode==='3d'&&d3.geoDistance(ll,ctr)>Math.PI/2) continue;
+    const lat=ll[1]; if(lat>85.05||lat<-85.05) continue; const lon=((ll[0]+540)%360)-180;
+    const gx=Math.floor((lon+180)/360*n*256), gy=Math.floor((1-Math.log(Math.tan(Math.PI/4+lat*D/2))/Math.PI)/2*n*256);
+    const r=look(z,((gx%(n*256))+n*256)%(n*256),Math.max(0,Math.min(n*256-1,gy))); if(!r) continue; const [d,si]=r, di=(y*w+x)*4;
+    o[di]=d[si]; o[di+1]=d[si+1]; o[di+2]=d[si+2]; o[di+3]=255; }
+  cx.putImageData(out,0,0); TC.cv=cv; TC.last=true;
+  const done=[...set].every(id=>{ const t=TC.tiles.get(id); return t&&t.st!==0; }); TC.key=done?key:'';
+}
+function setTiles(m){ TMODE=m; try{ localStorage.setItem('ow_tiles',m); }catch(e){} TC.tiles.clear(); TC.key=''; TC.cv=null; TC.last=false;
+  document.querySelectorAll('#tilemodes button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.t===m)); drawBase(); }
+document.querySelectorAll('#tilemodes button').forEach(b=>{ b.onclick=()=>setTiles(b.dataset.t); b.setAttribute('aria-pressed',b.dataset.t===TMODE); });
+if($('#bMapStyle')) $('#bMapStyle').onclick=()=>{ const order=['road','photo','roadl','none']; setTiles(order[(order.indexOf(TMODE)+1)%order.length]); const nm={road:'道路（暗）',photo:'航空写真',roadl:'道路（明）',none:'シンプル'}; const t=$('#toast'); if(t){ t.innerHTML='地図の見た目：'+nm[TMODE]; t.hidden=false; setTimeout(()=>t.hidden=true,1800); } };
+drawBase();
+
+
+/* ================= batch 20: Google Maps views (needs the user's own referrer-restricted key; the free map stays as fallback) ================= */
+var GM={on:false,kind:'',map:null,m3d:null,merc:d3.geoMercator().precision(.4),prevMode:'3d',loading:null,markers:new Map(),mt:0};
+function gmOn(){ return !!(GM&&GM.on&&GM.kind==="2d"&&GM.map); }
+const gmKey=()=>{ try{ return localStorage.getItem('ow_gkey')||''; }catch(e){ return ''; } };
+function gmLoad(){ if(window.google&&google.maps&&google.maps.importLibrary) return Promise.resolve(); if(GM.loading) return GM.loading;
+  GM.loading=new Promise((res,rej)=>{ const k0=gmKey(); if(!k0) return rej(new Error('nokey')); window.__owgm=()=>res(); window.gm_authFailure=()=>{ gmMsg('Google のキーが使えませんでした（キーの制限・課金の設定を確認してください）'); gmOff(); };
+    const s=document.createElement('script'); s.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(k0)}&v=beta&loading=async&callback=__owgm&language=ja&region=JP`; s.async=true; s.onerror=()=>rej(new Error('load')); document.head.appendChild(s); });
+  GM.loading.catch(()=>{ GM.loading=null; }); return GM.loading; }
+function gmMsg(t){ const el=$('#toast'); if(el){ el.innerHTML=esc(t); el.hidden=false; setTimeout(()=>el.hidden=true,5000); } }
+function gmBox(){ const d=document.getElementById('gmap'); d.hidden=false; return d; }
+function gmButtons(){ for(const [id,on0] of [['m3d',!GM.on&&mode==='3d'],['m2d',!GM.on&&mode==='2d'],['mG2',GM.on&&GM.kind==='2d'],['mG3',GM.on&&GM.kind==='3d']]){ const b=$('#'+id); if(b) b.setAttribute('aria-pressed',on0); } }
+function gmCenter(){ if(selected) return {lat:selected.lat,lng:selected.lon}; if(mode==='3d') return {lat:-rot[1],lng:-rot[0]}; return {lat:20,lng:-rot[0]}; }
+async function gmStart(kind){
+  if(!gmKey()){ gmKeyCard(); return; }
+  try{ await gmLoad(); }catch(e){ gmMsg(e.message==='nokey'?'Google のキーが未設定です':'Google マップを読み込めませんでした'); return; }
+  gmOff(true); const box=gmBox(); box.innerHTML=''; GM.kind=kind; GM.on=true; document.body.classList.add('gm',kind==='3d'?'gm3':'gm2');
+  const c=gmCenter();
+  try{
+    if(kind==='2d'){
+      const {Map}=await google.maps.importLibrary('maps');
+      GM.prevMode=mode; mode='2d';
+      GM.map=new Map(box,{center:c,zoom:selected?6:3,mapTypeId:'hybrid',isFractionalZoomEnabled:true,gestureHandling:'greedy',clickableIcons:false,fullscreenControl:false,streetViewControl:true,mapTypeControl:true,mapTypeControlOptions:{position:google.maps.ControlPosition.TOP_RIGHT}});
+      const sync=()=>{ layout(); drawBase(); }; for(const ev of ['bounds_changed','zoom_changed','center_changed','idle','resize']) GM.map.addListener(ev,sync);
+      GM.map.addListener('click',e=>{ const de=e.domEvent; if(!de) return; const r=box.getBoundingClientRect(); const x=(de.clientX??(de.changedTouches&&de.changedTouches[0].clientX))-r.left, y=(de.clientY??(de.changedTouches&&de.changedTouches[0].clientY))-r.top; const it=pick(x,y,24); if(it){ selCountry=null; select(it); } });
+    } else {
+      const lib=await google.maps.importLibrary('maps3d'); GM.lib=lib;
+      GM.m3d=new lib.Map3DElement({center:{lat:c.lat,lng:c.lng,altitude:0},range:selected?400000:17000000,tilt:selected?55:0,heading:0,mode:'HYBRID'});
+      GM.m3d.style.cssText='position:absolute;inset:0;width:100%;height:100%'; box.appendChild(GM.m3d);
+      gmMarkers(); clearInterval(GM.mt); GM.mt=setInterval(gmMarkers,60e3);
+      if(!selected) setTimeout(()=>{ try{ GM.m3d.flyCameraAround({camera:{center:{lat:c.lat,lng:c.lng,altitude:0},range:17000000,tilt:0},durationMillis:60000,rounds:1}); }catch(e){} },1500);
+    }
+  }catch(e){ console.warn('gm',e); gmMsg('Google マップを開けませんでした：'+(e.message||e)); gmOff(); return; }
+  gmButtons(); layout(); drawBase();
+}
+function gmOff(silent){ if(!GM.on&&!silent) return; clearInterval(GM.mt); GM.markers.clear();
+  if(GM.kind==='2d'&&GM.on) mode=GM.prevMode||'3d';
+  GM.on=false; GM.kind=''; GM.map=null; GM.m3d=null; const d=document.getElementById('gmap'); if(d){ d.innerHTML=''; d.hidden=true; }
+  document.body.classList.remove('gm','gm2','gm3'); if(!silent){ gmButtons(); layout(); drawBase(); } }
+function gmSync(){ const m=GM.map; const z=m.getZoom(), c=m.getCenter(); if(z==null||!c) return;
+  GM.merc.scale(256*Math.pow(2,z)/(2*Math.PI)).center([c.lng(),c.lat()]).translate([W/2,H/2]).rotate([0,0,0]); proj=GM.merc; k=Math.max(.7,Math.min(14,1+(z-2)*0.9)); }
+function gmFly(lon,lat,toK){ if(!GM||!GM.on) return false;
+  if(GM.kind==='2d'&&GM.map){ GM.map.panTo({lat,lng:lon}); const z=GM.map.getZoom(); if(z<6) GM.map.setZoom(Math.max(6,Math.min(12,toK?3+toK:7))); return true; }
+  if(GM.kind==='3d'&&GM.m3d){ try{ GM.m3d.stopCameraAnimation&&GM.m3d.stopCameraAnimation(); GM.m3d.flyCameraTo({endCamera:{center:{lat,lng:lon,altitude:0},range:toK&&toK>=6?60000:250000,tilt:55,heading:0},durationMillis:2500}); }catch(e){ console.warn('fly3d',e); } return true; }
+  return false; }
+const GM_SKIP=['flight','space','bike','jtraffic','amedas','facility','infra','camera','ukgrid','tone','satimg','rain','aurora'];
+function gmMarkers(){ if(!GM.m3d||!GM.lib) return; const want=new Map();
+  const pool=items.filter(o=>on[o.layer]&&!GM_SKIP.includes(o.layer)&&o.lat!=null&&isFinite(o.lat)&&tsOK(o)).sort((a,b)=>(rankT(b)-rankT(a))).slice(0,250);
+  for(const o of pool) want.set(o.layer+':'+(o.key||o.name),o);
+  for(const [k0,m] of GM.markers) if(!want.has(k0)){ m.remove(); GM.markers.delete(k0); }
+  const Cls=GM.lib.Marker3DInteractiveElement||GM.lib.Marker3DElement;
+  for(const [k0,o] of want){ if(GM.markers.has(k0)) continue; try{
+    const m=new Cls({position:{lat:o.lat,lng:o.lon},label:o.name.slice(0,40),altitudeMode:'CLAMP_TO_GROUND',extruded:false});
+    m.addEventListener('gmp-click',()=>{ const cur=items.find(i=>(i.layer+':'+(i.key||i.name))===k0)||o; selCountry=null; select(cur); });
+    GM.m3d.append(m); GM.markers.set(k0,m); }catch(e){ console.warn('mk3d',e); break; } } }
+function gmBaseDraw(c,path){ // overlays drawn above Google 2D tiles
+  if(typeof drawRain==='function') drawRain(c); if(typeof drawTone==='function') drawTone(c,path);
+  if(CABLES&&on.infra){ c.beginPath(); path(CABLES); c.strokeStyle=css('--c-cable'); c.lineWidth=1; c.stroke(); }
+  if(selCountry){ c.beginPath(); path(selCountry); c.fillStyle='rgba(79,195,217,.12)'; c.fill(); c.strokeStyle='rgba(79,195,217,.9)'; c.lineWidth=1.4; c.stroke(); } }
+function gmKeyCard(){ selected=null; selCountry=null;
+  $('#card').innerHTML=`<header><div class="tag" style="color:var(--signal)">MAP · Google マップ</div><h3 class="t">Google マップで表示する</h3><div class="coord">あなた専用の Google のキーが必要です</div><button class="x" id="close" aria-label="閉じる">✕</button></header>
+  <div class="sec"><h4>キーを入れる</h4><input class="inp" id="gkeyin" value="${esc(gmKey())}" placeholder="AIza…（Google Cloud で作ったキー）" aria-label="Google Maps API キー" autocomplete="off"><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn" id="gkeysave">保存して開く</button><button class="btn" id="gkeydel">キーを消す</button></div>
+  <div class="note" style="border:0;padding:6px 0 0">キーはこのブラウザの中だけに保存されます（チャットには貼らないでください）。キーは「https://pooplondon.github.io/*」からしか使えないように制限しておけば、ページに置いても安全です。作り方は、やることリストの「Google マップ」の項目にあります。</div></div>
+  <div class="sec"><h4>2つの表示</h4><div class="agi" style="padding-left:0">Google 地図：Google の地図と航空写真の上に、このサイトの全レイヤー（航空機・地震・ニュースなど）を重ねます。</div><div class="agi" style="padding-left:0">Google 3D：Google の立体の地球（写真のような3D）です。重要な出来事（最大250件）をピンで表示し、押すとその場所まで飛んで詳細が出ます。</div></div>`;
+  $('#card').hidden=false; $('#close').onclick=()=>{ $('#card').hidden=true; };
+  $('#gkeysave').onclick=()=>{ const v=$('#gkeyin').value.trim(); try{ localStorage.setItem('ow_gkey',v); }catch(e){} $('#card').hidden=true; if(v) gmStart('2d'); };
+  $('#gkeydel').onclick=()=>{ try{ localStorage.removeItem('ow_gkey'); }catch(e){} gmOff(); $('#gkeyin').value=''; }; }
+$('#mG2').onclick=()=>gmStart('2d'); $('#mG3').onclick=()=>gmStart('3d');
+if($('#gmset')) $('#gmset').onclick=gmKeyCard;
+
+/* ================= batch 21: time slider play + hourly chart + window; near me: you-are-here dot, follow, last position, recent nearby, nearby alerts ================= */
+/* --- 1. time slider extras --- */
+var TS_PLAY=0, TS_GT=0;
+// item time in ms: Date, epoch ms/seconds, or ISO-like text (other text is not a time)
+function tT(o){ const t=o&&o.t; if(t instanceof Date) return +t; if(typeof t==='number'&&isFinite(t)) return t>1e11?t:t>1e9?t*1000:null; if(typeof t==='string'&&/^\d{4}-\d\d-\d\d[T ]\d/.test(t)){ const v=Date.parse(t); return isFinite(v)?v:null; } return null; }
+tsOK=function(it){ if(TSL==null) return true; const t=tT(it); if(t==null) return true; return t<=TSL&&t>TSL-TSW; };
+function tsLocal(t){ return new Date(t).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function tsWinName(){ const h=TSW/3600e3; return h>=72?'3日':h+'時間'; }
+tsLabel=function(){ const el=$('#tslab'); if(!el) return; if(TSL==null){ el.textContent='ライブ（いま）'; return; }
+  const n=items.filter(o=>on[o.layer]&&tT(o)!=null&&tsOK(o)).length;
+  el.textContent=`${tsLocal(TSL-TSW)} 〜 ${tsLocal(TSL)}（${ago2(TSL)}）· ${n}件`; };
+function tsHist(){ const cv=$('#tshist'); if(!cv||$('#tslide').hidden) return; const w=cv.clientWidth, h=cv.clientHeight; if(!w) return;
+  const d=window.devicePixelRatio||1; cv.width=w*d; cv.height=h*d; const c=cv.getContext('2d'); c.setTransform(d,0,0,d,0,0); c.clearRect(0,0,w,h);
+  const now=Date.now(), b=new Array(168).fill(0);
+  for(const o of items){ if(!on[o.layer]) continue; const t=tT(o); if(t==null) continue; const ago=(now-t)/3600e3; if(ago<0||ago>=168) continue; b[167-Math.floor(ago)]++; }
+  const mx=Math.max(1,...b), bw=w/168, lo=TSL==null?null:168-(now-(TSL-TSW))/3600e3, hi=TSL==null?null:168-(now-TSL)/3600e3;
+  for(let i=0;i<168;i++){ if(!b[i]) continue; const bh=Math.max(1.5,(h-2)*Math.sqrt(b[i]/mx)); const inWin=lo!=null&&i+1>lo&&i<hi;
+    c.fillStyle=lo==null?'rgba(79,195,217,.55)':inWin?'rgba(79,195,217,.95)':'rgba(140,155,170,.3)'; c.fillRect(i*bw,h-bh,Math.max(1,bw-.5),bh); }
+  if(lo!=null){ c.strokeStyle='rgba(79,195,217,.9)'; c.lineWidth=1; c.strokeRect(Math.max(0,lo)*bw+.5,.5,(Math.min(168,hi)-Math.max(0,lo))*bw-1,h-1); } }
+function tsAfter(){ tsHist(); if(typeof GM!=='undefined'&&GM.on&&GM.kind==='3d'&&typeof gmMarkers==='function'){ clearTimeout(TS_GT); TS_GT=setTimeout(gmMarkers,400); } }
+function tsStop(){ if(TS_PLAY){ clearInterval(TS_PLAY); TS_PLAY=0; } const b=$('#tsplay'); if(b) b.textContent='▶ 再生'; }
+function tsPlay(){ if(TS_PLAY){ tsStop(); return; } const r=$('#tsr'); if(+r.value>=168) r.value=Math.min(167,Math.round(TSW/3600e3));
+  $('#tsplay').textContent='❚❚ 停止';
+  const stepH=()=>{ const v=+r.value+1; if(v>=168){ tsStop(); r.value=168; TSL=null; } else { r.value=v; TSL=Date.now()-(168-v)*3600e3; } tsLabel(); drawBase(); tsAfter(); };
+  stepH(); TS_PLAY=setInterval(stepH,matchMedia('(prefers-reduced-motion: reduce)').matches?900:350); }
+(function(){ const bar=$('#tslide'), r=$('#tsr'); if(!bar||!r) return;
+  const cv=document.createElement('canvas'); cv.id='tshist'; cv.title='1時間ごとの件数（タップでその時刻へ）'; cv.style.cssText='position:static;display:block;width:100%;height:30px;margin:6px 0 2px;cursor:pointer;touch-action:manipulation'; bar.insertBefore(cv,r);
+  const row=document.createElement('div'); row.style.cssText='display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap';
+  row.innerHTML=`<button class="btn" id="tsplay" style="font-size:11px;padding:3px 10px">▶ 再生</button><select class="inp" id="tswin" style="width:auto;font-size:11px;padding:2px 6px" aria-label="一度に表示する幅">${[[6,'6時間'],[24,'24時間'],[72,'3日']].map(([h,l])=>`<option value="${h}" ${h*3600e3===TSW?'selected':''}>${l}ぶん表示</option>`).join('')}</select><span style="font-size:10.5px;color:var(--muted)">グラフ＝1時間ごとの件数（オンのレイヤー）</span>`;
+  bar.appendChild(row);
+  const oi=r.oninput; r.oninput=e=>{ if(e&&e.isTrusted) tsStop(); oi(); tsAfter(); };
+  const ol=$('#tslive').onclick; $('#tslive').onclick=()=>{ tsStop(); ol(); tsAfter(); };
+  const tg=()=>{ tsStop(); tsToggle(); requestAnimationFrame(tsAfter); }; $('#tsx').onclick=tg; $('#bTime').onclick=tg;
+  $('#tsplay').onclick=tsPlay;
+  $('#tswin').onchange=e=>{ TSW=+e.target.value*3600e3; tsLabel(); drawBase(); tsAfter(); };
+  cv.onclick=e=>{ const rc=cv.getBoundingClientRect(); const i=Math.round((e.clientX-rc.left)/rc.width*168); const v=Math.max(1,Math.min(168,i)); tsStop(); r.value=v; TSL=v>=168?null:Date.now()-(168-v)*3600e3; tsLabel(); drawBase(); tsAfter(); };
+  setInterval(()=>{ if(!$('#tslide').hidden){ tsHist(); if(TSL!=null&&!TS_PLAY) tsLabel(); } },60e3);
+  addEventListener('resize',()=>tsHist());
+})();
+
+/* --- 2. near me extras --- */
+var NRS={follow:false,alert:true,r:50}; try{ Object.assign(NRS,JSON.parse(localStorage.getItem('ow_near')||'{}')); }catch(e){}
+function nrSave(){ try{ localStorage.setItem('ow_near',JSON.stringify(NRS)); }catch(e){} }
+function mpSave(){ if(!MYPOS) return; try{ localStorage.setItem('ow_mypos',JSON.stringify({lat:MYPOS.lat,lon:MYPOS.lon,at:Date.now()})); }catch(e){} }
+try{ const s=JSON.parse(localStorage.getItem('ow_mypos')||'null'); if(!MYPOS&&s&&isFinite(s.lat)&&isFinite(s.lon)&&Date.now()-s.at<14*86400e3) MYPOS={lat:s.lat,lon:s.lon,old:s.at}; }catch(e){}
+// "you are here" dot on the map (also over Google 地図; Google 3D draws its own markers)
+const _drawOver0=drawOver;
+drawOver=function(){ _drawOver0(); if(!MYPOS) return; if(typeof GM!=='undefined'&&GM.on&&GM.kind==='3d') return; if(!visible(MYPOS.lon,MYPOS.lat)) return;
+  const p=proj([MYPOS.lon,MYPOS.lat]); if(!p) return; const c=octx, ph=(tsec*.5)%1, col=MYPOS.old?'140,160,180':'61,139,255';
+  c.beginPath(); c.arc(p[0],p[1],7+ph*18,0,7); c.strokeStyle=`rgba(${col},${.6*(1-ph)})`; c.lineWidth=2; c.stroke();
+  c.beginPath(); c.arc(p[0],p[1],5.5,0,7); c.fillStyle=`rgb(${col})`; c.fill(); c.strokeStyle='#fff'; c.lineWidth=2; c.stroke(); };
+// follow me (watchPosition; only while the page is open — iOS stops it in the background)
+var NR_WATCH=null;
+function nearFollow(onf){ if(NR_WATCH!=null){ try{ navigator.geolocation.clearWatch(NR_WATCH); }catch(e){} NR_WATCH=null; } if(!onf||!navigator.geolocation) return;
+  NR_WATCH=navigator.geolocation.watchPosition(pos=>{ const prev=MYPOS; MYPOS={lat:pos.coords.latitude,lon:pos.coords.longitude}; mpSave();
+    if(!prev||prev.old||KM(prev,MYPOS)>0.2) flyTo(MYPOS.lon,MYPOS.lat,Math.max(k,mode==='3d'?6:8));
+    if($('#nrbody')&&(!prev||KM(prev,MYPOS)>0.05)) nearRender(); },
+    err=>{ gmMsg('現在地を追いかけられません（位置情報の許可を確認してください）'); NRS.follow=false; nrSave(); const c=$('#nrfollow'); if(c) c.checked=false; nearFollow(false); },
+    {enableHighAccuracy:true,maximumAge:15000,timeout:30000}); }
+// extra sections in the near panel
+const _nearRender0=nearRender;
+nearRender=function(){ _nearRender0(); const b=$('#nrbody'); if(!b||!MYPOS) return; const R=+($('#nrr')||{}).value||NRS.r||50;
+  if(R!==NRS.r){ NRS.r=R; nrSave(); }
+  if(MYPOS.old) $('#nrat').textContent+=` · 前回の位置（${ago2(MYPOS.old)}）`;
+  const now=Date.now(), recent=items.filter(o=>!NEAR_SKIP.includes(o.layer)&&tT(o)!=null&&now-tT(o)<3*3600e3&&now-tT(o)>-600e3&&o.lat!=null&&isFinite(o.lat)&&tsOK(o)&&KM(MYPOS,o)<=R).sort((a,c)=>tT(c)-tT(a)).slice(0,6);
+  const sec=document.createElement('div'); sec.className='sec';
+  sec.innerHTML=`<h4>この3時間に近くで起きたこと（新しい順）</h4>${recent.length?recent.map(o=>`<button class="agi" data-id="${o.id}">${esc(o.name)} <small style="color:var(--muted)">· ${esc(L[o.layer]?L[o.layer].name:o.layer)} · ${ago2(tT(o))} · ${Math.max(1,Math.round(KM(MYPOS,o)))} km</small></button>`).join(''):muted('ありません')}`;
+  const set=document.createElement('div'); set.className='sec';
+  set.innerHTML=`<h4>設定</h4><label style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0;cursor:pointer"><input type="checkbox" id="nrfollow" ${NRS.follow?'checked':''}> 動いたら追いかける（ページを開いている間）</label><label style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0;cursor:pointer"><input type="checkbox" id="nralert" ${NRS.alert?'checked':''}> 範囲内で新しい地震・災害・警報・大きな道路障害が出たら知らせる</label><div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap"><button class="btn" id="nrgo">現在地へ移動</button><button class="btn" id="nrre">位置を測り直す</button></div><div class="note" style="border:0;padding:6px 0 0">位置はこのブラウザの中だけに保存され、どこにも送られません。</div>`;
+  b.insertBefore(sec,b.children[1]||null); b.appendChild(set);
+  sec.querySelectorAll('[data-id]').forEach(x=>x.onclick=()=>{ const o=items.find(i=>i.id===x.dataset.id); if(o){ if(!on[o.layer]){ on[o.layer]=true; renderLayers(); } select(o); } });
+  $('#nrfollow').onchange=e=>{ NRS.follow=e.target.checked; nrSave(); nearFollow(NRS.follow); };
+  $('#nralert').onchange=e=>{ NRS.alert=e.target.checked; nrSave(); };
+  $('#nrgo').onclick=()=>flyTo(MYPOS.lon,MYPOS.lat,Math.max(k,mode==='3d'?6:8));
+  $('#nrre').onclick=()=>nearPanel(); };
+const _nearPanel0=nearPanel;
+nearPanel=function(){ _nearPanel0(); if(MYPOS&&$('#nrbody')) nearRender(); if(NRS.follow) nearFollow(true); };
+$('#bNear').onclick=nearPanel;
+// nearby alerts: new items inside the radius (skips what was already there when the page opened)
+const NR_SEEN=new Set(); let NR_INIT=false; const NR_AL=['quake','hazard','usalert','flood','mil','ukcut','transport','net'];
+function nearAlertTick(){ if(!MYPOS) return; const R=NRS.r||50, now=Date.now();
+  const hits=items.filter(o=>NR_AL.includes(o.layer)&&o.lat!=null&&isFinite(o.lat)&&(o.layer!=='transport'||o.sev==='Serious'||o.sev==='Severe')&&KM(MYPOS,o)<=R);
+  const fresh=[]; for(const o of hits){ const key=o.layer+':'+(o.key||o.id||o.name); if(NR_SEEN.has(key)) continue; NR_SEEN.add(key); { const t=tT(o); if(t==null||now-t<2*3600e3) fresh.push(o); } }
+  if(!NR_INIT){ NR_INIT=true; return; }
+  if(fresh.length&&NRS.alert){ gmMsg(`近くで新しい動き（${R} km 以内）：${fresh.slice(0,3).map(o=>o.name).join('、')}${fresh.length>3?` ほか${fresh.length-3}件`:''}`); if($('#nrbody')) nearRender(); } }
+setTimeout(nearAlertTick,45e3); setInterval(nearAlertTick,60e3);
+if(NRS.follow&&MYPOS) setTimeout(()=>nearFollow(true),3000);
 
 })();
 </script>
