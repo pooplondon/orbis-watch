@@ -2314,6 +2314,7 @@ const FL_SRCS=[
   {n:'airplanes.live',u:p=>`https://api.airplanes.live/v2/point/${p.lat.toFixed(2)}/${p.lon.toFixed(2)}/250`,h:'https://airplanes.live/',map:a=>'https://globe.airplanes.live/?icao='+a},
   {n:'adsb.fi',u:p=>`https://opendata.adsb.fi/api/v2/lat/${p.lat.toFixed(2)}/lon/${p.lon.toFixed(2)}/dist/250`,h:'https://adsb.fi/',map:a=>'https://globe.adsb.fi/?icao='+a},
   {n:'adsb.lol',u:p=>`https://api.adsb.lol/v2/point/${p.lat.toFixed(2)}/${p.lon.toFixed(2)}/250`,h:'https://adsb.lol/',map:a=>'https://globe.adsb.lol/?icao='+a}];
+const DEF_RELAY='https://orbis-relay.poop-london.workers.dev';
 const FL_VIA=[{n:'codetabs',u:x=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(x)},{n:'allorigins',u:x=>'https://api.allorigins.win/raw?url='+encodeURIComponent(x)}];
 var FL={via:null,ok:-1,fail:{},osAt:0,osFail:0,busy:false,last:null,why:''};
 const flSleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -2326,7 +2327,7 @@ function flFromADSB(a,src){ const now=Date.now();
 async function flRegional(){ const pts=flPoints(), got=new Map(); let used='';
   const order=[...FL_SRCS.keys()].sort((a,b)=>(b===FL.ok)-(a===FL.ok)||(FL.fail[a]||0)-(FL.fail[b]||0));
   // relay first when the user has one (works even if a source blocks browsers)
-  const relay=(typeof AG_CFG!=='undefined'&&AG_CFG.url)?AG_CFG.url.replace(/\/$/,''):'';
+  const relay=((typeof AG_CFG!=='undefined'&&AG_CFG.url)||DEF_RELAY).replace(/\/$/,'');
   for(const p of pts){ let done=false;
     if(relay){ try{ const j=await getJSON(`${relay}/adsb?lat=${p.lat.toFixed(2)}&lon=${p.lon.toFixed(2)}`,20000); const src={n:'中継（'+(j.src||'ADS-B')+'）',map:a=>'https://globe.airplanes.live/?icao='+a};
       for(const a of (j.ac||j.aircraft||[])) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,src)); used=src.n; done=true; }catch(e){ console.warn('relay adsb',e); } }
