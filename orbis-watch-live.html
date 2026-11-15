@@ -2314,7 +2314,8 @@ const FL_SRCS=[
   {n:'airplanes.live',u:p=>`https://api.airplanes.live/v2/point/${p.lat.toFixed(2)}/${p.lon.toFixed(2)}/250`,h:'https://airplanes.live/',map:a=>'https://globe.airplanes.live/?icao='+a},
   {n:'adsb.fi',u:p=>`https://opendata.adsb.fi/api/v2/lat/${p.lat.toFixed(2)}/lon/${p.lon.toFixed(2)}/dist/250`,h:'https://adsb.fi/',map:a=>'https://globe.adsb.fi/?icao='+a},
   {n:'adsb.lol',u:p=>`https://api.adsb.lol/v2/point/${p.lat.toFixed(2)}/${p.lon.toFixed(2)}/250`,h:'https://adsb.lol/',map:a=>'https://globe.adsb.lol/?icao='+a}];
-var FL={ok:-1,fail:{},osAt:0,osFail:0,busy:false,last:null,why:''};
+const FL_VIA=[{n:'codetabs',u:x=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(x)},{n:'allorigins',u:x=>'https://api.allorigins.win/raw?url='+encodeURIComponent(x)}];
+var FL={via:null,ok:-1,fail:{},osAt:0,osFail:0,busy:false,last:null,why:''};
 const flSleep=ms=>new Promise(r=>setTimeout(r,ms));
 function flPoints(){ const pts=[]; try{ const c=proj.invert([W/2,H/2]); if(c&&isFinite(c[0])&&isFinite(c[1])) pts.push({lat:c[1],lon:c[0]}); }catch(e){}
   for(const p of (typeof PLACES!=='undefined'?PLACES:[])) if(isFinite(p.lat)) pts.push({lat:p.lat,lon:p.lon});
@@ -2329,11 +2330,16 @@ async function flRegional(){ const pts=flPoints(), got=new Map(); let used='';
   for(const p of pts){ let done=false;
     if(relay){ try{ const j=await getJSON(`${relay}/adsb?lat=${p.lat.toFixed(2)}&lon=${p.lon.toFixed(2)}`,20000); const src={n:'中継（'+(j.src||'ADS-B')+'）',map:a=>'https://globe.airplanes.live/?icao='+a};
       for(const a of (j.ac||j.aircraft||[])) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,src)); used=src.n; done=true; }catch(e){ console.warn('relay adsb',e); } }
-    for(const i of order){ if(done) break; const s=FL_SRCS[i];
-      try{ const j=await getJSON(s.u(p),20000); const list=j.ac||j.aircraft||[]; for(const a of list) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,s));
+    for(const i of order){ if(done) break; if(FL.via!=null&&FL_SRCS.every((_,j)=>(FL.fail[j]||0)>=2)) break; const s=FL_SRCS[i];
+      try{ const j=await getJSON(s.u(p),12000); const list=j.ac||j.aircraft||[]; for(const a of list) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,s));
         FL.ok=i; FL.fail[i]=0; used=used&&!used.includes(s.n)?used+'・'+s.n:s.n; done=true; }
       catch(e){ FL.fail[i]=(FL.fail[i]||0)+1; FL.why=String(e&&e.message||e); console.warn(s.n,e); }
-      await flSleep(1100); } }
+      await flSleep(1100); }
+    // last resort without a relay: free public CORS proxies (public aircraft data only)
+    if(!done) for(const [vi,via] of FL_VIA.entries()){ if(done) break; for(const i of [2,0]){ const s=FL_SRCS[i];
+      try{ const j=await getJSON(via.u(s.u(p)),15000); const list=j.ac||j.aircraft||[]; if(!Array.isArray(list)) throw new Error('bad');
+        for(const a of list) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,s)); used=s.n+'（'+via.n+'経由）'; done=true; FL.via=vi; break; }
+      catch(e){ FL.why=via.n+': '+String(e&&e.message||e); console.warn(via.n,s.n,e); } await flSleep(600); } } }
   return {list:[...got.values()],used}; }
 async function flOpenSky(){ if(FL.osFail>=3||Date.now()-FL.osAt<15*60e3) return null; FL.osAt=Date.now();
   try{ const j=await getJSON('https://opensky-network.org/api/states/all',30000); const now=Date.now(); FL.osFail=0;
@@ -2345,7 +2351,7 @@ async function loadFlights(){ if(FL.busy) return; FL.busy=true;
     const list=[...m.values()];
     if(list.length){ replaceLayer('flight',list); state.flight='live'; fetchedAt.flight=hhmm();
       L.flight.src=[r.used,FL.last?'OpenSky（世界）':''].filter(Boolean).join(' ＋ ')||'ADS-B'; L.flight.url=r.used?(FL_SRCS.find(s=>r.used.includes(s.n))||{h:'https://opensky-network.org/'}).h:'https://opensky-network.org/'; }
-    else if(state.flight!=='live') state.flight='err';
+    else if(state.flight!=='live'){ state.flight='err'; L.flight.src='直接は取得できません（中継サーバーを設定すると取れます）'; }
     renderLayers(); badge(); refreshDerived();
   }finally{ FL.busy=false; } }
 setInterval(()=>{ if(on.flight&&!document.hidden) loadFlights(); },60e3);
