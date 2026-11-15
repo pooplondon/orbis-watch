@@ -355,6 +355,7 @@ function liveInfo(it){
   if(it.layer==='flight' && it.live){ const mins=Math.max(0,Math.round((Date.now()-it.seen)/60000));
     return {'コールサイン':it.name,'機体ID（ICAO24）':it.icao||'—',...(it.reg?{'登録記号':it.reg}:{}),...(it.type?{'機種':it.type}:{}),...(it.country?{'登録国':it.country}:{}),'高度':it.alt?Math.round(it.alt).toLocaleString()+' ft':'—','対地速度':it.kts?Math.round(it.kts)+' kt':'—','進行方向':Math.round(it.track||0)+'°','位置':mins<1?'受信直後':`最終受信から${mins}分（推定位置）`}; }
   if(it.layer==='flight'){ const pct=Math.round(it.t*100); return {'区間':`${it.from} → ${it.to}`,'出発地':AP[it.from][2],'到着地':AP[it.to][2],'高度':it.alt.toLocaleString()+' ft','対地速度':it.kts+' kt','進捗':pct+'%（残り '+Math.round(it.dist*(1-it.t)).toLocaleString()+' km）'}; }
+  if(it.layer==='ship'&&it.live){ return {'船名':it.name,'MMSI':it.mmsi,'速力':it.kn!=null?(+it.kn).toFixed(1)+' kn':'—','針路':it.cog!=null?Math.round(it.cog)+'°':'—','行き先':it.dest||'—','船種':it.stype||'—','位置の受信':ago2(it.seen)}; }
   if(it.layer==='ship'){ return {'船種':it.type,'航路':it.lane,'速力':it.kn+' kn','MMSI':it.mmsi,'状態':'航行中'}; }
   return it.info;
 }
@@ -438,7 +439,7 @@ function drawOver(){
   if(selected && selected.layer==='space' && selected.trail && selected.trail.length>1){ c.beginPath(); path({type:'LineString',coordinates:selected.trail}); c.strokeStyle='rgba(255,143,216,.6)'; c.lineWidth=1.2; c.stroke(); }
   if(selected && selected.layer==='hazard' && selected.track && selected.track.length>1){ c.beginPath(); path({type:'LineString',coordinates:selected.track}); c.setLineDash([3,3]); c.strokeStyle='rgba(255,163,64,.7)'; c.lineWidth=1.2; c.stroke(); c.setLineDash([]); }
   if(selected && selected.layer==='flight' && !selected.live){ c.beginPath(); path({type:'LineString',coordinates:[selected.A,selected.B]}); c.setLineDash([3,4]); c.strokeStyle='rgba(232,232,232,.5)'; c.lineWidth=1; c.stroke(); c.setLineDash([]); }
-  if(selected && selected.layer==='ship'){ c.beginPath(); path({type:'LineString',coordinates:LANES[selected.lane]}); c.setLineDash([2,4]); c.strokeStyle='rgba(63,208,182,.5)'; c.lineWidth=1; c.stroke(); c.setLineDash([]); }
+  if(selected && selected.layer==='ship' && !selected.live && LANES[selected.lane]){ c.beginPath(); path({type:'LineString',coordinates:LANES[selected.lane]}); c.setLineDash([2,4]); c.strokeStyle='rgba(63,208,182,.5)'; c.lineWidth=1; c.stroke(); c.setLineDash([]); }
   if(typeof drawAurora==='function') drawAurora(c);
   if(typeof drawGridLines==='function') drawGridLines(c,path);
   if(typeof drawTC==='function') drawTC(c,path);
@@ -687,7 +688,7 @@ async function loadHazards(){
   }catch(e){ console.warn('EONET',e); if(state.hazard!=='live') state.hazard='err'; }
   refreshDerived();
 }
-async function loadFlights(){
+async function loadFlightsOld(){
   let list=null;
   try{
     const j=await getJSON('https://opensky-network.org/api/states/all',40000); const now=Date.now();
@@ -811,7 +812,7 @@ async function loadCables(){
     if(lp){ const list=(lp.features||[]).filter(f=>f.geometry&&f.geometry.type==='Point').map(f=>mk('infra',`陸揚局：${f.properties.name}`,f.geometry.coordinates[1],f.geometry.coordinates[0],{'種別':'海底ケーブル陸揚局'},{srcid:'cable',srcName:'Submarine Cable Map（TeleGeography）',url:'https://www.submarinecablemap.com/',small:true}));
       replaceInfra(list,'cable'); }
     state.infra='live'; fetchedAt.infra=hhmm(); L.infra.cables=(g.features||[]).length;
-  }catch(e){ console.warn('cables',e); }
+  }catch(e){ console.warn('cables',e); if(state.infra==='load'){ state.infra='err'; renderLayers(); } }
   refreshDerived();
 }
 function replaceInfra(list,src){ for(let i=items.length-1;i>=0;i--) if(items[i].layer==='infra'&&items[i].srcid===src) items.splice(i,1); items.push(...list); }
@@ -823,7 +824,7 @@ async function loadPlants(){
       const info={'種別':'原子力発電所'}; if(t.operator) info['運営']=t.operator; if(t['plant:output:electricity']) info['出力']=t['plant:output:electricity']; if(t.start_date) info['運転開始']=t.start_date;
       return mk('infra',t['name:ja']||t.name||t['name:en']||'原子力発電所',lat,lon,info,{srcid:'osm',srcName:'OpenStreetMap',url:`https://www.openstreetmap.org/${el.type}/${el.id}`}); }).filter(Boolean);
     if(list.length){ for(let i=items.length-1;i>=0;i--){ const it=items[i]; if(it.layer==='infra'&&!it.live&&/原子力/.test(it.info['種別']+it.info['概要'])) items.splice(i,1); } replaceInfra(list,'osm'); state.infra='live'; fetchedAt.infra=hhmm(); }
-  }catch(e){ console.warn('overpass',e); }
+  }catch(e){ console.warn('overpass',e); if(typeof infraNuclearFallback==='function') infraNuclearFallback(); }
   refreshDerived();
 }
 /* ---- satellites (CelesTrak visual group, propagated with satellite.js) ---- */
@@ -1532,10 +1533,10 @@ async function amedasHTML(p){
 
 setInterval(loadIndices,10*60e3); setInterval(loadFX,60*60e3); setInterval(loadCrypto,5*60e3);
 setInterval(loadP2P, 2*60e3); setInterval(loadGDACS, 30*60e3); setInterval(loadNews, 15*60e3); setInterval(loadISS, 5e3);
-loadQuakes(); loadHazards(); loadFlights();
+loadQuakes(); loadHazards(); setTimeout(()=>loadFlights(),0);
 setInterval(loadQuakes, 5*60e3);      // USGS updates every minute; 5 min is plenty
 setInterval(loadHazards, 30*60e3);    // EONET changes slowly
-setInterval(loadFlights, 15*60e3);    // OpenSky anonymous limit: about 100 global calls a day
+    // OpenSky anonymous limit: about 100 global calls a day
 
 window.addEventListener('resize',fit); fit(); try{ new ResizeObserver(()=>{ const r=stage.getBoundingClientRect(); if(Math.abs(r.width-W)>1||Math.abs(r.height-H)>1) fit(); }).observe(stage); }catch(e){}
 let prev=performance.now();
@@ -2224,6 +2225,169 @@ function nearAlertTick(){ if(!MYPOS) return; const R=NRS.r||50, now=Date.now();
   if(fresh.length&&NRS.alert){ gmMsg(`近くで新しい動き（${R} km 以内）：${fresh.slice(0,3).map(o=>o.name).join('、')}${fresh.length>3?` ほか${fresh.length-3}件`:''}`); if($('#nrbody')) nearRender(); } }
 setTimeout(nearAlertTick,45e3); setInterval(nearAlertTick,60e3);
 if(NRS.follow&&MYPOS) setTimeout(()=>nearFollow(true),3000);
+
+/* ================= batch 22: live data for facilities (airports, power plants, dams, ports) + インフラ status fix ================= */
+/* --- 1. インフラ: if Overpass fails, use nuclear plants from the embedded WRI data so the layer is never stuck --- */
+function infraNuclearFallback(){ try{
+  if(items.some(o=>o.layer==='infra'&&o.srcid==='osm')) return;
+  const list=FAC.p.filter(p=>p[1]==='N').map(p=>mk('infra',`${p[0]}（原子力）`,p[3],p[4],{'種別':'原子力発電所','出力（設備容量）':p[2].toLocaleString()+' MW','国':p[5],'運転開始':p[6]||'—'},{srcid:'osm',srcName:'WRI Global Power Plant Database',url:'https://datasets.wri.org/dataset/globalpowerplantdatabase'}));
+  if(list.length){ for(let i=items.length-1;i>=0;i--){ const it=items[i]; if(it.layer==='infra'&&!it.live&&/原子力/.test((it.info['種別']||'')+(it.info['概要']||''))) items.splice(i,1); } replaceInfra(list,'osm'); state.infra='live'; fetchedAt.infra=hhmm(); }
+  renderLayers(); refreshDerived(); }catch(e){ console.warn('nucfb',e); } }
+setTimeout(()=>{ if(state.infra==='load'){ infraNuclearFallback(); } },100e3);
+
+/* --- 2. live airport weather on the map (METAR flight category for big airports in view) --- */
+const MET_CAT={VFR:['#3ddc84','有視界（良好）'],MVFR:['#4fa3ff','やや悪い'],IFR:['#ff5d5d','計器飛行（悪い）'],LIFR:['#e45dff','非常に悪い']};
+const FMET=new Map(); let FMET_KEY='', FMET_AT=0;
+function metCat(m){ if(m.fltCat) return m.fltCat; const v=parseFloat(String(m.visib).replace('+',''));
+  let ceil=1e9; for(const c of m.clouds||[]) if(['BKN','OVC','OVX'].includes(c.cover)&&c.base!=null) ceil=Math.min(ceil,c.base);
+  if(ceil<500||v<1) return 'LIFR'; if(ceil<1000||v<3) return 'IFR'; if(ceil<=3000||v<=5) return 'MVFR'; return 'VFR'; }
+function metNearest(list,o){ let best=null,bd=8; for(const m of list){ if(m.lat==null) continue; const d=KM(o,{lat:m.lat,lon:m.lon}); if(d<bd){ bd=d; best=m; } } return best; }
+function metText(m){ const cat=metCat(m), c=MET_CAT[cat]||['#ccc',cat];
+  const w=m.wspd!=null?`風 ${m.wdir==='VRB'?'不定':(m.wdir??'—')+'°'} ${m.wspd} kt${m.wgst?`（突風 ${m.wgst} kt）`:''}`:'';
+  const ago=m.obsTime?ago2(m.obsTime*1000):''; return {cat,col:c[0],txt:`${c[1]} · ${m.temp!=null?Math.round(m.temp)+'℃ · ':''}${w}${m.visib!=null?` · 視程 ${m.visib} SM`:''}${ago?` · ${ago}`:''}`}; }
+async function facMetars(){
+  if(!on.facility||k<2.2) return; const c=proj.invert([W/2,H/2]); if(!c||!isFinite(c[0])) return;
+  const h=Math.min(25,60/k), s=Math.max(-85,c[1]-h), n=Math.min(85,c[1]+h), w=Math.max(-180,c[0]-h*1.5), e=Math.min(180,c[0]+h*1.5);
+  const key=[s,w,n,e].map(v=>v.toFixed(0)).join(','); if(key===FMET_KEY&&Date.now()-FMET_AT<10*60e3) return; FMET_KEY=key; FMET_AT=Date.now();
+  const aps=items.filter(o=>o.layer==='facility'&&o.fk==='airport'&&o.lat>=s&&o.lat<=n&&o.lon>=w&&o.lon<=e); if(!aps.length) return;
+  try{ const j=await getJSON(`https://aviationweather.gov/api/data/metar?bbox=${s.toFixed(1)},${w.toFixed(1)},${n.toFixed(1)},${e.toFixed(1)}&format=json`,30000);
+    for(const a of aps){ const m=metNearest(j||[],a); if(m){ FMET.set(a.key,m); a.met=metText(m); a.info['いまの空港の天気（METAR）']=a.met.txt; } }
+  }catch(err){ console.warn('fac metar',err); FMET_KEY=''; } }
+setInterval(()=>{ if(on.facility) facMetars(); },5000);
+const _drawOver21=drawOver;
+drawOver=function(){ _drawOver21(); if(!on.facility||k<2.2||!FMET.size) return; const c=octx;
+  for(const it of items){ if(it.layer!=='facility'||it.fk!=='airport'||!it.met||!visible(it.lon,it.lat)||!tsOK(it)) continue; const p=proj([it.lon,it.lat]); if(!p) continue;
+    c.beginPath(); c.arc(p[0]+5,p[1]-5,2.6,0,7); c.fillStyle=it.met.col; c.fill(); } };
+
+/* --- 3. live details in the card when a facility is opened --- */
+const UKFUEL={N:['NUCLEAR'],G:['CCGT','OCGT'],W:['WIND'],C:['COAL'],B:['BIOMASS'],H:['NPSHYD','PS'],O:['OIL']};
+const UK_BOX=p=>p.lat>49.8&&p.lat<61&&p.lon>-8.7&&p.lon<2;
+function windCF(v){ if(v<3) return 0; if(v>=25) return 0; if(v>=12) return 1; return Math.pow((v-3)/9,3); }
+function facLiveBox(html){ const box=$('#faclive'); if(box) box.innerHTML=html; }
+async function facLive(it){
+  const inf=$('#info'); if(!inf) return;
+  inf.insertAdjacentHTML('beforebegin',`<div class="near" id="faclivewrap"><h3 class="k">いまの様子（ライブ）</h3><div id="faclive" style="font-size:12.5px;line-height:1.6;padding:2px 0 6px">読み込み中…</div></div>`);
+  const rows=[], add=(a,b)=>rows.push(`<div><b style="color:var(--muted);font-weight:500">${esc(a)}</b>　${b}</div>`), done=(note)=>{ if(selected!==it) return; facLiveBox((rows.join('')||muted('取得できませんでした'))+(note?`<div class="note" style="border:0;padding:4px 0 0">${note}</div>`:'')); };
+  try{
+    if(it.fk==='airport'){
+      const [mj,aj,faa]=await Promise.all([
+        getJSON(`https://aviationweather.gov/api/data/metar?bbox=${(it.lat-.3).toFixed(2)},${(it.lon-.3).toFixed(2)},${(it.lat+.3).toFixed(2)},${(it.lon+.3).toFixed(2)}&format=json`).catch(()=>null),
+        getJSON(`https://api.adsb.lol/v2/point/${it.lat.toFixed(3)}/${it.lon.toFixed(3)}/25`).catch(()=>null),
+        it.info['国コード']==='US'?fetch('https://nasstatus.faa.gov/api/airport-status-information').then(r=>r.ok?r.text():null).catch(()=>null):Promise.resolve(null)]);
+      const m=mj&&metNearest(mj,it); if(m){ const t=metText(m); it.met=t; FMET.set(it.key,m); add('天気',`<span style="color:${t.col}">●</span> ${esc(t.txt)}`); add('METAR',`<code style="font-size:11px">${esc(m.rawOb||'')}</code>`); }
+      if(aj&&aj.ac){ const ac=aj.ac.filter(a=>a.lat!=null), low=ac.filter(a=>a.alt_baro==='ground'||(+a.alt_baro<8000)), gnd=ac.filter(a=>a.alt_baro==='ground');
+        const up=low.filter(a=>a.alt_baro!=='ground'&&(a.baro_rate||0)>300).length, dn=low.filter(a=>a.alt_baro!=='ground'&&(a.baro_rate||0)<-300).length;
+        add('周りの航空機（半径 約46 km）',`${ac.length} 機 · 地上 ${gnd.length} · 上昇中（出発）${up} · 降下中（到着）${dn}`);
+        const cs=low.filter(a=>a.flight).slice(0,6).map(a=>esc(a.flight.trim())+(a.alt_baro==='ground'?'（地上）':`（${a.alt_baro} ft）`)); if(cs.length) add('低い高度の便',cs.join('、')); }
+      if(faa){ const code=(it.info['IATA']||'').toUpperCase(); const re=new RegExp(`<ARPT>${code}</ARPT>[\\s\\S]{0,600}?</(Delay|Ground_Delay|Ground_Stop|Airport)>`,'g'); const hits=faa.match(re)||[];
+        add('アメリカ航空局（FAA）の遅れ情報',hits.length?hits.map(h=>esc(h.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim())).join('<br>'):'いまは遅れ・閉鎖の発表なし'); }
+      done('天気：aviationweather.gov（NOAA） · 航空機：adsb.lol（どちらも数分おきに更新）'); return; }
+    if(it.fk==='plant'){
+      const j=await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${it.lat}&longitude=${it.lon}&current=temperature_2m,wind_speed_10m,wind_gusts_10m,shortwave_radiation,cloud_cover,precipitation&wind_speed_unit=ms`).catch(()=>null);
+      const c=j&&j.current; if(c){ add('現地の天気',`${Math.round(c.temperature_2m)}℃ · 風 ${c.wind_speed_10m.toFixed(1)} m/s · 雲 ${c.cloud_cover}% · 日射 ${Math.round(c.shortwave_radiation)} W/m²`);
+        if(it.fuel==='W'){ const cf=windCF(c.wind_speed_10m*1.35); add('いまの発電の目安（推定）',`定格の約 ${Math.round(cf*100)}%（≈ ${Math.round(cf*it.mw).toLocaleString()} MW）`); }
+        if(it.fuel==='S'){ const cf=Math.min(1,c.shortwave_radiation/1000*.85); add('いまの発電の目安（推定）',`定格の約 ${Math.round(cf*100)}%（≈ ${Math.round(cf*it.mw).toLocaleString()} MW）`); } }
+      if(UK_BOX(it)&&UKFUEL[it.fuel]){ if(!GRID&&typeof loadGrid==='function') await loadGrid().catch(()=>{});
+        if(GRID&&GRID.mix){ const v=UKFUEL[it.fuel].reduce((s,f)=>s+(GRID.mix[f]||0),0); add(`英国全体の${FUEL_J[it.fuel]}発電（いま）`,`${(v/1000).toFixed(2)} GW（Elexon、5分ごと）`); } }
+      if(it.fuel==='H'){ const fl=await getJSON(`https://flood-api.open-meteo.com/v1/flood?latitude=${it.lat}&longitude=${it.lon}&daily=river_discharge&past_days=7&forecast_days=7`).catch(()=>null);
+        if(fl&&fl.daily){ const d=fl.daily.river_discharge, i=7; if(d[i]!=null) add('川の水量（推定・日ごと）',`今日 ${Math.round(d[i])} m³/s · 7日前 ${Math.round(d[0])} · 1週間の最大予測 ${Math.round(Math.max(...d.slice(i)))}`); } }
+      done('発電所ごとのリアルタイム出力は、英国以外は無料で公開されていません（推定と国全体の値を表示）。天気：Open-Meteo'); return; }
+    if(it.fk==='dam'||it.fk==='res'){
+      const [fl,w]=await Promise.all([getJSON(`https://flood-api.open-meteo.com/v1/flood?latitude=${it.lat}&longitude=${it.lon}&daily=river_discharge&past_days=7&forecast_days=7`).catch(()=>null),
+        getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${it.lat}&longitude=${it.lon}&daily=precipitation_sum&past_days=2&forecast_days=3`).catch(()=>null)]);
+      if(fl&&fl.daily){ const d=fl.daily.river_discharge; if(d[7]!=null) add('川の水量（推定・日ごと）',`今日 ${Math.round(d[7])} m³/s · 7日前 ${Math.round(d[0])} · この先1週間の最大 ${Math.round(Math.max(...d.slice(7)))}`); }
+      if(w&&w.daily){ const p=w.daily.precipitation_sum; add('雨の量',`昨日まで2日 ${(p[0]+p[1]).toFixed(1)} mm · 今日〜3日 ${(p[2]+p[3]+p[4]).toFixed(1)} mm`); }
+      done('水量：Open-Meteo（GloFAS の推定）。ダムの貯水率は国ごとのサイトにあり、無料のまとめた API はありません。'); return; }
+    if(it.fk==='port'){
+      const [mr,w]=await Promise.all([getJSON(`https://marine-api.open-meteo.com/v1/marine?latitude=${it.lat}&longitude=${it.lon}&current=wave_height,wave_direction,wave_period`).catch(()=>null),
+        getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${it.lat}&longitude=${it.lon}&current=wind_speed_10m,wind_gusts_10m,wind_direction_10m,visibility&wind_speed_unit=ms`).catch(()=>null)]);
+      if(mr&&mr.current&&mr.current.wave_height!=null) add('波',`${mr.current.wave_height.toFixed(1)} m · 周期 ${mr.current.wave_period??'—'} 秒`);
+      if(w&&w.current) add('風',`${w.current.wind_speed_10m.toFixed(1)} m/s（突風 ${w.current.wind_gusts_10m.toFixed(1)}）${w.current.visibility!=null?` · 視程 ${(w.current.visibility/1000).toFixed(1)} km`:''}`);
+      done('船の実際の位置は、AIS の無料キー（aisstream.io）を入れると表示できます（やることリスト参照）。'); return; }
+    done();
+  }catch(e){ console.warn('faclive',e); done(); } }
+const _select21=select; select=function(it){ const r=_select21(it); try{ if(it&&it.layer==='facility'&&$('#info')) facLive(it); }catch(e){} return r; };
+
+/* ================= batch 23: live aircraft from several free sources (+ relay fallback), live ships with the user's own AISStream key ================= */
+/* --- 1. aircraft: regional ADS-B sources around the view and "my places", then OpenSky worldwide; every 60 s --- */
+const FL_SRCS=[
+  {n:'airplanes.live',u:p=>`https://api.airplanes.live/v2/point/${p.lat.toFixed(2)}/${p.lon.toFixed(2)}/250`,h:'https://airplanes.live/',map:a=>'https://globe.airplanes.live/?icao='+a},
+  {n:'adsb.fi',u:p=>`https://opendata.adsb.fi/api/v2/lat/${p.lat.toFixed(2)}/lon/${p.lon.toFixed(2)}/dist/250`,h:'https://adsb.fi/',map:a=>'https://globe.adsb.fi/?icao='+a},
+  {n:'adsb.lol',u:p=>`https://api.adsb.lol/v2/point/${p.lat.toFixed(2)}/${p.lon.toFixed(2)}/250`,h:'https://adsb.lol/',map:a=>'https://globe.adsb.lol/?icao='+a}];
+var FL={ok:-1,fail:{},osAt:0,osFail:0,busy:false,last:null,why:''};
+const flSleep=ms=>new Promise(r=>setTimeout(r,ms));
+function flPoints(){ const pts=[]; try{ const c=proj.invert([W/2,H/2]); if(c&&isFinite(c[0])&&isFinite(c[1])) pts.push({lat:c[1],lon:c[0]}); }catch(e){}
+  for(const p of (typeof PLACES!=='undefined'?PLACES:[])) if(isFinite(p.lat)) pts.push({lat:p.lat,lon:p.lon});
+  if(typeof MYPOS!=='undefined'&&MYPOS) pts.push(MYPOS);
+  const out=[]; for(const p of pts) if(!out.some(q=>KM(p,q)<350)) out.push(p); return out.slice(0,4); }
+function flFromADSB(a,src){ const now=Date.now();
+  return mk('flight',(a.flight||'').trim()||a.r||a.hex.toUpperCase(),a.lat,a.lon,{},{icao:a.hex,reg:a.r,type:a.t,alt:typeof a.alt_baro==='number'?a.alt_baro:null,kts:a.gs||0,track:a.track||a.true_heading||0,seen:now-(a.seen_pos||a.seen||0)*1000,key:a.hex,url:src.map(a.hex),srcName:src.n}); }
+async function flRegional(){ const pts=flPoints(), got=new Map(); let used='';
+  const order=[...FL_SRCS.keys()].sort((a,b)=>(b===FL.ok)-(a===FL.ok)||(FL.fail[a]||0)-(FL.fail[b]||0));
+  // relay first when the user has one (works even if a source blocks browsers)
+  const relay=(typeof AG_CFG!=='undefined'&&AG_CFG.url)?AG_CFG.url.replace(/\/$/,''):'';
+  for(const p of pts){ let done=false;
+    if(relay){ try{ const j=await getJSON(`${relay}/adsb?lat=${p.lat.toFixed(2)}&lon=${p.lon.toFixed(2)}`,20000); const src={n:'中継（'+(j.src||'ADS-B')+'）',map:a=>'https://globe.airplanes.live/?icao='+a};
+      for(const a of (j.ac||j.aircraft||[])) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,src)); used=src.n; done=true; }catch(e){ console.warn('relay adsb',e); } }
+    for(const i of order){ if(done) break; const s=FL_SRCS[i];
+      try{ const j=await getJSON(s.u(p),20000); const list=j.ac||j.aircraft||[]; for(const a of list) if(a.lat!=null&&a.lon!=null&&a.alt_baro!=='ground'&&a.hex) got.set(a.hex,flFromADSB(a,s));
+        FL.ok=i; FL.fail[i]=0; used=used&&!used.includes(s.n)?used+'・'+s.n:s.n; done=true; }
+      catch(e){ FL.fail[i]=(FL.fail[i]||0)+1; FL.why=String(e&&e.message||e); console.warn(s.n,e); }
+      await flSleep(1100); } }
+  return {list:[...got.values()],used}; }
+async function flOpenSky(){ if(FL.osFail>=3||Date.now()-FL.osAt<15*60e3) return null; FL.osAt=Date.now();
+  try{ const j=await getJSON('https://opensky-network.org/api/states/all',30000); const now=Date.now(); FL.osFail=0;
+    return (j.states||[]).filter(s=>s[5]!=null&&s[6]!=null&&!s[8]).map(s=>mk('flight',(s[1]||'').trim()||s[0].toUpperCase(),s[6],s[5],{},{icao:s[0],country:s[2],alt:s[7]!=null?s[7]*3.28084:null,kts:s[9]!=null?s[9]*1.94384:0,track:s[10]||0,seen:(s[4]||now/1000)*1000,key:s[0],url:'https://opensky-network.org/aircraft-profile?icao24='+s[0],srcName:'OpenSky Network'})); }
+  catch(e){ FL.osFail++; console.warn('OpenSky',e); return null; } }
+async function loadFlights(){ if(FL.busy) return; FL.busy=true;
+  try{ const r=await flRegional(); const os=await flOpenSky(); if(os&&os.length) FL.last=os;
+    const m=new Map(); for(const o of (FL.last||[])) m.set(o.key,o); for(const o of r.list) m.set(o.key,o);
+    const list=[...m.values()];
+    if(list.length){ replaceLayer('flight',list); state.flight='live'; fetchedAt.flight=hhmm();
+      L.flight.src=[r.used,FL.last?'OpenSky（世界）':''].filter(Boolean).join(' ＋ ')||'ADS-B'; L.flight.url=r.used?(FL_SRCS.find(s=>r.used.includes(s.n))||{h:'https://opensky-network.org/'}).h:'https://opensky-network.org/'; }
+    else if(state.flight!=='live') state.flight='err';
+    renderLayers(); badge(); refreshDerived();
+  }finally{ FL.busy=false; } }
+setInterval(()=>{ if(on.flight&&!document.hidden) loadFlights(); },60e3);
+let FL_VT=0, FL_VK=''; setInterval(()=>{ try{ const c=proj.invert([W/2,H/2]); if(!c) return; const key=Math.round(c[0]/4)+','+Math.round(c[1]/4); if(key!==FL_VK&&k>=1.5){ FL_VK=key; clearTimeout(FL_VT); FL_VT=setTimeout(()=>{ if(on.flight) loadFlights(); },4000); } }catch(e){} },3000);
+
+/* --- 2. ships: AISStream websocket with the user's own free key (kept only in this browser) --- */
+const aisKey=()=>{ try{ return localStorage.getItem('ow_aiskey')||''; }catch(e){ return ''; } };
+var AIS={ws:null,ships:new Map(),boxKey:'',t:0,msgs:0,err:''};
+function aisBoxes(){ const b=[]; const box=(p,d)=>[[Math.max(-90,p.lat-d),Math.max(-180,p.lon-d*1.5)],[Math.min(90,p.lat+d),Math.min(180,p.lon+d*1.5)]];
+  try{ const c=proj.invert([W/2,H/2]); if(c&&isFinite(c[0])&&k>=2) b.push(box({lat:c[1],lon:c[0]},Math.min(8,30/k))); }catch(e){}
+  for(const p of (typeof PLACES!=='undefined'?PLACES:[]).slice(0,3)) if(isFinite(p.lat)) b.push(box(p,2.5));
+  if(!b.length) b.push([[49,-6],[53,3]]); return b; }
+function aisStart(){ const key=aisKey(); if(!key||!on.ship) return; const boxes=aisBoxes(), bk=JSON.stringify(boxes.map(x=>x.map(y=>y.map(v=>Math.round(v)))));
+  if(AIS.ws&&AIS.ws.readyState<=1){ if(bk===AIS.boxKey) return; try{ AIS.ws.close(); }catch(e){} }
+  AIS.boxKey=bk; let ws; try{ ws=new WebSocket('wss://stream.aisstream.io/v0/stream'); }catch(e){ AIS.err=String(e); return; } AIS.ws=ws;
+  ws.onopen=()=>ws.send(JSON.stringify({APIKey:key,BoundingBoxes:boxes,FilterMessageTypes:['PositionReport','ShipStaticData','StandardClassBPositionReport']}));
+  ws.onmessage=async ev=>{ let j; try{ j=JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text()); }catch(e){ return; }
+    if(j.error){ AIS.err=j.error; gmMsg('AIS のキーが使えませんでした：'+j.error); return; }
+    const md=j.MetaData||{}, mm=String(md.MMSI||''); if(!mm) return; AIS.msgs++;
+    const s=AIS.ships.get(mm)||{mmsi:mm}; s.name=(md.ShipName||s.name||'').trim();
+    const pr=j.Message&&(j.Message.PositionReport||j.Message.StandardClassBPositionReport);
+    if(pr){ s.lat=md.latitude??pr.Latitude; s.lon=md.longitude??pr.Longitude; s.sog=pr.Sog; s.cog=pr.Cog; s.seen=Date.now(); }
+    const sd=j.Message&&j.Message.ShipStaticData; if(sd){ s.dest=(sd.Destination||'').trim(); s.stype=sd.Type; if(sd.Name) s.name=sd.Name.trim(); }
+    AIS.ships.set(mm,s); };
+  ws.onclose=()=>{ if(AIS.ws===ws){ AIS.ws=null; if(on.ship&&aisKey()&&!AIS.err) setTimeout(aisStart,15000); } };
+  ws.onerror=()=>{ AIS.err=AIS.err||''; }; }
+const AIS_TYPE=t=>t==null?'—':t>=70&&t<80?'貨物船':t>=80&&t<90?'タンカー':t>=60&&t<70?'旅客船':t===30?'漁船':t===52?'タグボート':t>=36&&t<38?'プレジャーボート':'その他（'+t+'）';
+function aisFlush(){ if(!AIS.ships.size) return; const now=Date.now(); const list=[];
+  for(const [mm,s] of AIS.ships){ if(!s.seen||now-s.seen>30*60e3||s.lat==null||Math.abs(s.lat)>90){ if(s.seen&&now-s.seen>30*60e3) AIS.ships.delete(mm); continue; }
+    list.push(mk('ship',s.name||('MMSI '+mm),s.lat,s.lon,{},{mmsi:mm,kn:s.sog,cog:s.cog,dest:s.dest,stype:AIS_TYPE(s.stype),seen:s.seen,key:'ais'+mm,srcName:'AISStream',url:'https://www.marinetraffic.com/en/ais/details/ships/mmsi:'+mm})); }
+  if(!list.length) return; ships.splice(0,ships.length); replaceLayer('ship',list); state.ship='live'; fetchedAt.ship=hhmm(); L.ship.src='AISStream（あなたのキー）'; L.ship.url='https://aisstream.io/'; renderLayers(); badge(); }
+setInterval(()=>{ if(on.ship){ aisStart(); aisFlush(); } else if(AIS.ws){ try{ AIS.ws.close(); }catch(e){} AIS.ws=null; } },5000);
+function aisKeyCard(){ selected=null; selCountry=null;
+  $('#card').innerHTML=`<header><div class="tag" style="color:var(--c-ship)">AIS · 船のライブ位置</div><h3 class="t">本物の船を表示する</h3><div class="coord">AISStream の無料キーが必要です</div><button class="x" id="close" aria-label="閉じる">✕</button></header>
+  <div class="sec"><h4>キーを入れる</h4><input class="inp" id="aiskin" value="${esc(aisKey())}" placeholder="AISStream の API キー" aria-label="AISStream API キー" autocomplete="off"><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn" id="aissave">保存して表示</button><button class="btn" id="aisdel">キーを消す</button></div>
+  <div class="note" style="border:0;padding:6px 0 0">キーはこのブラウザの中だけに保存されます（チャットには貼らないでください）。キーは https://aisstream.io で GitHub アカウントでサインインし、「API Keys」で無料で作れます。表示されるのは、いま見ている範囲とマイ地域の周りの船です。</div></div>
+  <div class="sec"><h4>いまの状態</h4><div class="agi" style="padding-left:0">${aisKey()?(AIS.err?'エラー：'+esc(AIS.err):AIS.ws?`接続中 · 受信 ${AIS.msgs} 件 · 船 ${AIS.ships.size} 隻`:'待機中'):'キー未設定（見本の船を表示中）'}</div></div>`;
+  $('#card').hidden=false; $('#close').onclick=()=>{ $('#card').hidden=true; };
+  $('#aissave').onclick=()=>{ const v=$('#aiskin').value.trim(); try{ localStorage.setItem('ow_aiskey',v); }catch(e){} AIS.err=''; AIS.boxKey=''; if(AIS.ws){ try{ AIS.ws.close(); }catch(e){} AIS.ws=null; } if(!on.ship){ on.ship=true; renderLayers(); } aisStart(); gmMsg('保存しました。数十秒で船が出てきます'); aisKeyCard(); };
+  $('#aisdel').onclick=()=>{ try{ localStorage.removeItem('ow_aiskey'); }catch(e){} if(AIS.ws){ try{ AIS.ws.close(); }catch(e){} AIS.ws=null; } aisKeyCard(); }; }
+(function(){ const g=$('#gmset'); if(!g) return; const b=document.createElement('button'); b.className='btn'; b.id='aisset'; b.style.cssText='width:100%;margin-top:8px'; b.textContent='船（AIS）のキーを設定'; b.onclick=aisKeyCard; g.parentNode.appendChild(b); })();
+if(aisKey()) setTimeout(aisStart,2000);
 
 })();
 </script>
