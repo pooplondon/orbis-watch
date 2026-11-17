@@ -774,6 +774,10 @@ async function newsFromDoc(q){
   refreshDerived();
 }
 async function loadNews(){
+  await new Promise(r=>setTimeout(r,0));
+  let why=''; try{ await loadNewsRss(); return; }catch(e){ console.warn('news rss',e); why=String(e.message||e).slice(0,80); }
+  await loadNewsGdelt(); if(state.news==='err'){ L.news.src='RSS も GDELT も取得できませんでした（'+why+'）'; renderLayers(); } }
+async function loadNewsGdelt(){
   try{
     const q=encodeURIComponent(NEWS_Q[NEWS_MODE]);
     let j=null; try{ j=await getJSON(`https://api.gdeltproject.org/api/v2/geo/geo?query=${q}&mode=PointData&format=GeoJSON&timespan=24h`); }catch(e){ console.warn('GDELT GEO',e); }
@@ -1579,14 +1583,18 @@ setTimeout(loadEmerg,8000); setInterval(loadEmerg,5*60e3);
 /* --- satellite imagery (NASA GIBS, VIIRS true colour, yesterday's global mosaic) --- */
 let SATIMG=null; const SATC={key:'',cv:null,tm:0};
 async function loadSatImg(){
-  try{ const day=new Date(Date.now()-DAY).toISOString().slice(0,10); const T=512, cols=3, rows=2; const cv=document.createElement('canvas'); cv.width=cols*T; cv.height=rows*T; const cx=cv.getContext('2d'); let ok=0;
+  for(const back of [1,2]) for(const lay of ['VIIRS_NOAA20_CorrectedReflectance_TrueColor','VIIRS_SNPP_CorrectedReflectance_TrueColor','MODIS_Terra_CorrectedReflectance_TrueColor']){
+    if(await loadSatImg1(lay,back)) return; }
+  state.satimg='err'; L.satimg.src='NASA GIBS（取得できませんでした）'; renderLayers(); drawBase(); }
+async function loadSatImg1(lay,back){
+  try{ const day=new Date(Date.now()-back*DAY).toISOString().slice(0,10); const T=512, cols=3, rows=2; const cv=document.createElement('canvas'); cv.width=cols*T; cv.height=rows*T; const cx=cv.getContext('2d'); let ok=0;
     await Promise.all([...Array(cols*rows)].map((_,i)=>new Promise(res=>{ const c=i%cols, r=Math.floor(i/cols); const im=new Image(); im.crossOrigin='anonymous'; const to=setTimeout(res,25000);
       im.onload=()=>{ clearTimeout(to); cx.drawImage(im,c*T,r*T); ok++; res(); }; im.onerror=()=>{ clearTimeout(to); res(); };
-      im.src=`https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${day}/250m/1/${r}/${c}.jpg`; })));
-    if(!ok) throw new Error('tiles');
-    SATIMG={data:cx.getImageData(0,0,cols*T,rows*T).data,w:cols*T,h:rows*T,px:0.28125,day}; SATC.key=''; state.satimg='live'; fetchedAt.satimg=hhmm(); L.satimg.src=`NASA GIBS（VIIRS・${day}）`;
-  }catch(e){ console.warn('gibs',e); state.satimg='err'; L.satimg.src='NASA GIBS（取得できませんでした）'; }
-  renderLayers(); drawBase();
+      im.src=`https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/${lay}/default/${day}/250m/1/${r}/${c}.jpg`; })));
+    if(ok<3) throw new Error('tiles '+ok);
+    SATIMG={data:cx.getImageData(0,0,cols*T,rows*T).data,w:cols*T,h:rows*T,px:0.28125,day}; SATC.key=''; state.satimg='live'; fetchedAt.satimg=hhmm(); L.satimg.src=`NASA GIBS（${lay.split('_').slice(0,2).join(' ')}・${day}）`;
+  }catch(e){ console.warn('gibs',lay,back,e); return false; }
+  renderLayers(); drawBase(); return true;
 }
 function drawSatImg(c){
   if(!on.satimg||!SATIMG) return; const key=rainKey();
@@ -2164,6 +2172,52 @@ setTimeout(async()=>{ await relayKeys(); let v=''; try{ v=localStorage.getItem('
   if(/(^|[#&])v=/.test(location.hash)) return;
   if((v==='g2d'||v==='g3d')&&gmKey()) gmStart(v==='g2d'?'2d':'3d'); else if(v==='2d'&&mode!=='2d') setMode('2d'); },600);
 if($('#gmset')) $('#gmset').onclick=gmKeyCard;
+/* ================= batch 29: news layer from RSS (BBC / Guardian / Al Jazeera / NPR / NHK) — relay /p first, rss2json as fallback ================= */
+const RSS_FEEDS={
+  world:[['BBC','https://feeds.bbci.co.uk/news/world/rss.xml',''],['Guardian','https://www.theguardian.com/world/rss',''],['Al Jazeera','https://www.aljazeera.com/xml/rss/all.xml',''],['NPR','https://feeds.npr.org/1004/rss.xml','']],
+  bbc:[['BBC World','https://feeds.bbci.co.uk/news/world/rss.xml',''],['BBC UK','https://feeds.bbci.co.uk/news/uk/rss.xml','United Kingdom'],['BBC Business','https://feeds.bbci.co.uk/news/business/rss.xml','United Kingdom']],
+  ja:[['NHK 国際','https://www3.nhk.or.jp/rss/news/cat6.xml',''],['NHK 主要','https://www3.nhk.or.jp/rss/news/cat0.xml','Japan'],['NHK 経済','https://www3.nhk.or.jp/rss/news/cat5.xml','Japan']]};
+const RSS_LABEL={world:'BBC・Guardian・Al Jazeera・NPR（RSS）',bbc:'BBC（RSS）',ja:'NHK（RSS）'};
+const NEWS_SKIP=new Set(['Georgia','Chad','Jersey','Guernsey','Niue','Vatican','Antarctica','Siachen Glacier']);
+const NEWS_ALIAS={'U.S.':'United States of America','US':'United States of America','USA':'United States of America','America':'United States of America','American':'United States of America','Washington':'United States of America','Trump':'United States of America',
+  'UK':'United Kingdom','Britain':'United Kingdom','British':'United Kingdom','England':'United Kingdom','Scotland':'United Kingdom','Wales':'United Kingdom','London':'United Kingdom','Northern Ireland':'United Kingdom',
+  'Russian':'Russia','Moscow':'Russia','Kremlin':'Russia','Ukrainian':'Ukraine','Kyiv':'Ukraine','Gaza':'Palestine','West Bank':'Palestine','Palestinian':'Palestine','Israeli':'Israel','Iranian':'Iran','Tehran':'Iran',
+  'Chinese':'China','Beijing':'China','Japanese':'Japan','Tokyo':'Japan','Korean':'South Korea','Seoul':'South Korea','Pyongyang':'North Korea','Indian':'India','Delhi':'India','Pakistani':'Pakistan',
+  'French':'France','Paris':'France','German':'Germany','Berlin':'Germany','Italian':'Italy','Rome':'Italy','Spanish':'Spain','Madrid':'Spain','Syrian':'Syria','Lebanese':'Lebanon','Turkish':'Turkey','Saudi':'Saudi Arabia',
+  'Mexican':'Mexico','Brazilian':'Brazil','Canadian':'Canada','Australian':'Australia','Venezuelan':'Venezuela','DR Congo':'Dem. Rep. Congo','South Sudan':'S. Sudan','Bosnia':'Bosnia and Herz.','Czech':'Czechia','Dominican Republic':'Dominican Rep.','Ivory Coast':"Côte d'Ivoire",'UAE':'United Arab Emirates','Dubai':'United Arab Emirates','Hong Kong':'Hong Kong',
+  'アメリカ':'United States of America','米国':'United States of America','米政府':'United States of America','トランプ':'United States of America','イギリス':'United Kingdom','英国':'United Kingdom','中国':'China','韓国':'South Korea','北朝鮮':'North Korea','ロシア':'Russia','ウクライナ':'Ukraine','イスラエル':'Israel','ガザ':'Palestine','パレスチナ':'Palestine','イラン':'Iran','イラク':'Iraq','インド':'India','台湾':'Taiwan','フランス':'France','ドイツ':'Germany','イタリア':'Italy','スペイン':'Spain','カナダ':'Canada','ブラジル':'Brazil','メキシコ':'Mexico','オーストラリア':'Australia','インドネシア':'Indonesia','フィリピン':'Philippines','ベトナム':'Vietnam','タイ':'Thailand','トルコ':'Turkey','サウジアラビア':'Saudi Arabia','エジプト':'Egypt','シリア':'Syria','レバノン':'Lebanon','パキスタン':'Pakistan','アフガニスタン':'Afghanistan','ミャンマー':'Myanmar','ネパール':'Nepal','バングラデシュ':'Bangladesh','南アフリカ':'South Africa','ナイジェリア':'Nigeria','ケニア':'Kenya','スーダン':'Sudan','ベネズエラ':'Venezuela','アルゼンチン':'Argentina','ポーランド':'Poland','オランダ':'Netherlands','ベルギー':'Belgium','スイス':'Switzerland','スウェーデン':'Sweden','ノルウェー':'Norway','フィンランド':'Finland','ギリシャ':'Greece','カタール':'Qatar','シンガポール':'Singapore','マレーシア':'Malaysia','ニュージーランド':'New Zealand','キューバ':'Cuba','コロンビア':'Colombia','ペルー':'Peru','チリ':'Chile','モンゴル':'Mongolia','カンボジア':'Cambodia','香港':'Hong Kong','日本':'Japan','政府':'Japan','首相':'Japan','東京':'Japan'};
+let NEWS_RX=null;
+function newsRx(){ if(NEWS_RX) return NEWS_RX; const names=new Map();
+  for(const c of COUNTRIES){ const n=c.properties.name; if(NEWS_SKIP.has(n)||/\./.test(n)) continue; names.set(n,n); }
+  for(const [a,n] of Object.entries(NEWS_ALIAS)) names.set(a,n);
+  const keys=[...names.keys()].sort((a,b)=>b.length-a.length).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  NEWS_RX={rx:new RegExp('(?:^|[^A-Za-z])('+keys.join('|')+')(?![A-Za-z])','g'),names}; return NEWS_RX; }
+function newsCountry(text){ if(!text) return null; const {rx,names}=newsRx(); rx.lastIndex=0; const m=rx.exec(text); if(!m) return null; const n=names.get(m[1]); return COUNTRIES.find(c=>c.properties.name===n)||null; }
+async function getText1(url,ms){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms);
+  try{ const r=await fetch(url,{signal:c.signal,cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.text(); } finally{ clearTimeout(t); } }
+const stripTags=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\s+/g,' ').trim();
+function parseRss(x){ const d=new DOMParser().parseFromString(x,'text/xml'); if(d.querySelector('parsererror')) return [];
+  return [...d.querySelectorAll('item')].map(i=>{ const g=n=>{ const e=i.getElementsByTagName(n)[0]; return e?e.textContent.trim():''; };
+    const pd=g('pubDate')||g('dc:date'); const t=pd?new Date(pd):null; return {title:g('title'),link:g('link'),desc:stripTags(g('description')),t:t&&isFinite(t)?t:null}; }).filter(a=>a.title&&a.link); }
+async function rssItems(url){
+  if(RELAY_URL){ try{ const it=parseRss(await getText1(RELAY_URL+'/p?u='+encodeURIComponent(url),20000)); if(it.length) return it; }catch(e){ console.warn('rss relay',url,e); } }
+  const j=await getJSON1('https://api.rss2json.com/v1/api.json?rss_url='+encodeURIComponent(url),20000); if(j.status&&j.status!=='ok') throw new Error(j.message||j.status);
+  return (j.items||[]).map(i=>{ const t=i.pubDate?new Date(String(i.pubDate).replace(' ','T')+'Z'):null; return {title:i.title,link:i.link,desc:stripTags(i.description),t:t&&isFinite(t)?t:null}; }).filter(a=>a.title&&a.link); }
+async function loadNewsRss(){
+  const mode=NEWS_MODE, feeds=RSS_FEEDS[mode]||RSS_FEEDS.world;
+  const res=await Promise.allSettled(feeds.map(([n,u,home])=>rssItems(u).then(it=>it.map(a=>({...a,src:n,home})))));
+  const arts=[]; const seen=new Set(); for(const r of res) if(r.status==='fulfilled') for(const a of r.value){ if(seen.has(a.link)) continue; seen.add(a.link); arts.push(a); }
+  if(!arts.length) throw new Error('RSS: '+res.map(r=>r.reason&&(r.reason.message||r.reason)).filter(Boolean).slice(0,2).join(' / '));
+  const by={}; const now=Date.now();
+  for(const a of arts){ if(a.t&&now-a.t>48*3600e3) continue; let f=newsCountry(a.title)||newsCountry(a.desc); if(!f&&a.home) f=COUNTRIES.find(c=>c.properties.name===a.home); if(!f) continue;
+    (by[f.properties.name]=by[f.properties.name]||{f,arts:[]}).arts.push(a); }
+  const list=Object.values(by).map(({f,arts})=>{ arts.sort((a,b)=>(b.t||0)-(a.t||0)); const [lon,lat]=d3.geoCentroid(f); const n=arts.length; const nm=f.properties.name; const top=arts[0];
+    return mk('news',top.title,lat,lon,{'場所':nm,'記事数（48時間）':n+' 件','最新':top.t?fmt(top.t):'—','配信':[...new Set(arts.map(a=>a.src))].join('・'),'要約':top.desc?top.desc.slice(0,200):'—'},
+      {articles:arts.slice(0,8).map(a=>({url:a.link,title:a.title+' · '+a.src})),t:top.t||new Date(),risk:n>=8?'高':n>=3?'中':'低',srcid:'rss',srcName:RSS_LABEL[mode],url:top.link,key:'rss'+nm}); });
+  if(!list.length) throw new Error('RSS: no located items');
+  if(NEWS_MODE!==mode) return;
+  L.news.src=RSS_LABEL[mode]; L.news.url=feeds[0][1]; replaceLayer('news',list,'rss'); state.news='live'; fetchedAt.news=hhmm(); refreshDerived(); }
+
 
 /* ================= batch 21: time slider play + hourly chart + window; near me: you-are-here dot, follow, last position, recent nearby, nearby alerts ================= */
 /* --- 1. time slider extras --- */
