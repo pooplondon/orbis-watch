@@ -573,7 +573,7 @@ function counts(){ const c={}; items.forEach(i=>c[i.layer]=(c[i.layer]||0)+1); r
 function renderLayers(){
   const c=counts();
   $('#layers').innerHTML = LAYERS.map(l=>`<button class="layer" data-l="${l.id}" aria-pressed="${on[l.id]}"><span class="sw" style="background:${l.color}"></span><span>${l.name}${stLabel(l.id)}<small>${l.code} · ${esc(l.src)}</small></span><span class="n">${c[l.id]||0}</span></button>`).join('');
-  document.querySelectorAll('.layer').forEach(b=>b.onclick=()=>{ const id=b.dataset.l; on[id]=!on[id]; b.setAttribute('aria-pressed',on[id]); if(on[id]&&typeof ensureLayer==='function') ensureLayer(id); if(id==='infra'||id==='rain'||id==='satimg'||id==='tone') drawBase(); });
+  document.querySelectorAll('.layer').forEach(b=>b.onclick=()=>{ const id=b.dataset.l; on[id]=!on[id]; b.setAttribute('aria-pressed',on[id]); try{ localStorage.setItem('ow_layers',JSON.stringify(on)); }catch(e){} if(on[id]&&typeof ensureLayer==='function') ensureLayer(id); if(id==='infra'||id==='rain'||id==='satimg'||id==='tone') drawBase(); });
 }
 function renderConvs(){
   $('#convs').innerHTML = CONVS.map((cv,i)=>`<button class="conv" data-i="${i}"><span class="row"><strong>${esc(regionName(cv))}</strong><span class="sev ${cv.types.length>=4?'':'m'}">${cv.types.length>=4?'高':'中'}</span></span><span class="chips">${cv.types.map(t=>`<span class="chip" style="color:${L[t].color}">${L[t].code}</span>`).join('')}</span></button>`).join('') || '<div class="note">該当なし</div>';
@@ -2120,7 +2120,7 @@ async function gmStart(kind){
       GM.m3d=new lib.Map3DElement({center:{lat:c.lat,lng:c.lng,altitude:0},range:selected?400000:17000000,tilt:selected?55:0,heading:0,mode:'HYBRID'});
       GM.m3d.style.cssText='position:absolute;inset:0;width:100%;height:100%'; box.appendChild(GM.m3d);
       gmMarkers(); clearInterval(GM.mt); GM.mt=setInterval(gmMarkers,60e3);
-      if(!selected) setTimeout(()=>{ try{ GM.m3d.flyCameraAround({camera:{center:{lat:c.lat,lng:c.lng,altitude:0},range:17000000,tilt:0},durationMillis:60000,rounds:1}); }catch(e){} },1500);
+      if(!selected) setTimeout(gmSpinStart,1200);
     }
   }catch(e){ console.warn('gm',e); gmMsg('Google マップを開けませんでした：'+(e.message||e)); gmOff(); return; }
   gmButtons(); layout(); drawBase();
@@ -2133,7 +2133,7 @@ function gmSync(){ const m=GM.map; const z=m.getZoom(), c=m.getCenter(); if(z==n
   GM.merc.scale(256*Math.pow(2,z)/(2*Math.PI)).center([c.lng(),c.lat()]).translate([W/2,H/2]).rotate([0,0,0]); proj=GM.merc; k=Math.max(.7,Math.min(14,1+(z-2)*0.9)); }
 function gmFly(lon,lat,toK){ if(!GM||!GM.on) return false;
   if(GM.kind==='2d'&&GM.map){ GM.map.panTo({lat,lng:lon}); const z=GM.map.getZoom(); if(z<6) GM.map.setZoom(Math.max(6,Math.min(12,toK?3+toK:7))); return true; }
-  if(GM.kind==='3d'&&GM.m3d){ try{ GM.m3d.stopCameraAnimation&&GM.m3d.stopCameraAnimation(); GM.m3d.flyCameraTo({endCamera:{center:{lat,lng:lon,altitude:0},range:toK&&toK>=6?60000:250000,tilt:55,heading:0},durationMillis:2500}); }catch(e){ console.warn('fly3d',e); } return true; }
+  if(GM.kind==='3d'&&GM.m3d){ SPIN.pauseUntil=Date.now()+120000; SPIN.sync=true; try{ GM.m3d.stopCameraAnimation&&GM.m3d.stopCameraAnimation(); GM.m3d.flyCameraTo({endCamera:{center:{lat,lng:lon,altitude:0},range:toK&&toK>=6?60000:250000,tilt:55,heading:0},durationMillis:2500}); }catch(e){ console.warn('fly3d',e); } return true; }
   return false; }
 const GM_SKIP=['flight','space','bike','jtraffic','amedas','facility','infra','camera','ukgrid','tone','satimg','rain','aurora'];
 function gmMarkers(){ if(!GM.m3d||!GM.lib) return; const want=new Map();
@@ -2157,7 +2157,19 @@ function gmKeyCard(){ selected=null; selCountry=null;
   $('#card').hidden=false; $('#close').onclick=()=>{ $('#card').hidden=true; };
   $('#gkeysave').onclick=()=>{ const v=$('#gkeyin').value.trim(); try{ localStorage.setItem('ow_gkey',v); }catch(e){} $('#card').hidden=true; if(v){ gmStart('2d').then(()=>{ if(GM.on) gmRemember('g2d'); }); } };
   $('#gkeydel').onclick=()=>{ try{ localStorage.removeItem('ow_gkey'); }catch(e){} gmOff(); $('#gkeyin').value=''; }; }
-const gmRemember=v=>{ try{ localStorage.setItem('ow_gmode',v); }catch(e){} };
+const gmRemember=v=>{ try{ localStorage.setItem('ow_gmode2',v); }catch(e){} };
+const SPIN={on:false,raf:0,last:0,lastSet:0,pauseUntil:0,lng:0,lat:20,sync:false};
+function gmSpinStart(){ const m=GM.m3d; if(!m) return; const c=m.center||{}; SPIN.lng=isFinite(+c.lng)?+c.lng:0; SPIN.lat=Math.max(-25,Math.min(35,isFinite(+c.lat)?+c.lat:20));
+  try{ m.range=16000000; m.tilt=0; m.heading=0; }catch(e){}
+  if(!m.__spin){ m.__spin=true; for(const ev of ['pointerdown','wheel','touchstart','gmp-click']) m.addEventListener(ev,()=>{ SPIN.pauseUntil=Date.now()+20000; SPIN.sync=true; },{passive:true}); }
+  SPIN.on=true; SPIN.last=performance.now(); cancelAnimationFrame(SPIN.raf); SPIN.raf=requestAnimationFrame(gmSpinTick); }
+function gmSpinTick(t){ const m=GM.m3d; if(!SPIN.on||!m||!GM.on||GM.kind!=='3d'){ SPIN.on=false; return; }
+  const dt=Math.min(200,t-SPIN.last); SPIN.last=t; SPIN.raf=requestAnimationFrame(gmSpinTick);
+  if(Date.now()<SPIN.pauseUntil||document.hidden) return;
+  if(SPIN.sync){ SPIN.sync=false; const c=m.center||{}; if(isFinite(+c.lng)) SPIN.lng=+c.lng; if(isFinite(+c.lat)) SPIN.lat=+c.lat; }
+  if((+m.range||0)<5e6) return;            /* zoomed in: stay still */
+  SPIN.lng-=dt*0.002; if(SPIN.lng<-180) SPIN.lng+=360;   /* 2°/s, about 3 minutes per turn, same direction as the real Earth */
+  if(t-SPIN.lastSet<50) return; SPIN.lastSet=t; try{ m.center={lat:SPIN.lat,lng:SPIN.lng,altitude:0}; }catch(e){} }
 $('#mG2').onclick=async()=>{ await gmStart('2d'); if(GM.on) gmRemember('g2d'); }; $('#mG3').onclick=async()=>{ await gmStart('3d'); if(GM.on) gmRemember('g3d'); };
 $('#m3d').addEventListener('click',()=>gmRemember('3d')); $('#m2d').addEventListener('click',()=>gmRemember('2d'));
 var RK_ERR='';
@@ -2168,10 +2180,94 @@ async function relayKeys(){ if(!RELAY_URL){ RK_ERR='中継の URL が未設定';
     try{ if(j.gkey) localStorage.setItem('ow_gkey',j.gkey); if(j.aiskey) localStorage.setItem('ow_aiskey',j.aiskey); }catch(e){}
     if(j.aiskey&&!had&&!on.ship){ on.ship=true; renderLayers(); }
   }catch(e){ console.warn('keys',e); RK_ERR='中継につながりません（'+(e.name==='AbortError'?'時間切れ':(e.message||e))+'）'; } finally{ clearTimeout(t); } }
-setTimeout(async()=>{ await relayKeys(); let v=''; try{ v=localStorage.getItem('ow_gmode')||''; }catch(e){}
+setTimeout(()=>{ /* default layers: everything except rain radar, satellite imagery and London bikes; the viewer's own choices are remembered */
+  const def=Object.fromEntries(Object.keys(on).map(k=>[k,!['rain','bike','satimg'].includes(k)])); let sv=null; try{ sv=JSON.parse(localStorage.getItem('ow_layers')||'null'); }catch(e){}
+  for(const k in on){ const v=sv&&(k in sv)?!!sv[k]:def[k]; on[k]=v; } renderLayers(); drawBase();
+  let i=0; for(const id in on) if(on[id]&&LAZY[id]) setTimeout(()=>ensureLayer(id),800*(i++)); },1500);
+setTimeout(async()=>{ await relayKeys(); let v='g3d'; try{ v=localStorage.getItem('ow_gmode2')||'g3d'; }catch(e){}
   if(/(^|[#&])v=/.test(location.hash)) return;
   if((v==='g2d'||v==='g3d')&&gmKey()) gmStart(v==='g2d'?'2d':'3d'); else if(v==='2d'&&mode!=='2d') setMode('2d'); },600);
 if($('#gmset')) $('#gmset').onclick=gmKeyCard;
+/* ================= batch 32: 市場 panel — what is happening in financial markets (indices by region, FX with day change, crypto, exchanges open, market news, AI summary) ================= */
+let FXPREV=null, MKN=null;
+async function loadFXPrev(){ if(FXPREV&&Date.now()-FXPREV.at<6*3600e3) return; const d=Date.now()-DAY; for(let i=0;i<4;i++){ const ds=new Date(d-i*DAY).toISOString().slice(0,10); try{ const j=await getJSON(`https://api.frankfurter.dev/v1/${ds}?from=USD`); if(j&&j.rates){ FXPREV={rates:{...j.rates,USD:1},date:j.date,at:Date.now()}; return; } }catch(e){} } }
+async function loadMktNews(){ if(MKN&&Date.now()-MKN.at<10*60e3) return MKN;
+  const feeds=[['BBC Business','https://feeds.bbci.co.uk/news/business/rss.xml'],['Guardian Business','https://www.theguardian.com/business/rss'],['NHK 経済','https://www3.nhk.or.jp/rss/news/cat5.xml']];
+  const res=await Promise.allSettled(feeds.map(([n,u])=>rssItems(u).then(it=>it.slice(0,8).map(a=>({...a,src:n})))));
+  const arts=[]; for(const r of res) if(r.status==='fulfilled') arts.push(...r.value);
+  arts.sort((a,b)=>(b.t||0)-(a.t||0)); MKN={arts,at:Date.now()}; return MKN; }
+const MK_REG=o=>o.lon==null?'その他':o.lon>60?'アジア・太平洋':o.lon>-30?'欧州・中東・アフリカ':'米州';
+function mktRows(){ const out=[]; if(MKT_BY_NUM) for(const rows of Object.values(MKT_BY_NUM)) for(const o of rows) if(o.price!=null&&o.chg!=null) out.push(o); return out; }
+const mkSgn=v=>(v>=0?'+':'')+v.toFixed(2)+'%';
+function fxPairs(){ if(!FX) return []; const r=FX.rates, p=FXPREV&&FXPREV.rates;
+  const P=[['USD/JPY',x=>x.JPY],['EUR/USD',x=>1/x.EUR],['GBP/USD',x=>1/x.GBP],['GBP/JPY',x=>x.JPY/x.GBP],['EUR/JPY',x=>x.JPY/x.EUR],['USD/CNY',x=>x.CNY]];
+  return P.map(([n,f])=>{ const v=f(r); const pv=p?f(p):null; return {n,v,chg:pv&&isFinite(pv)?(v/pv-1)*100:null}; }).filter(x=>isFinite(x.v)); }
+const fxFmt=x=>x.v.toFixed(x.n.includes('JPY')||x.n.includes('CNY')?2:4);
+function mktSummary(){ const lines=[]; const rows=mktRows(); const by={};
+  for(const o of rows) (by[MK_REG(o)]=by[MK_REG(o)]||[]).push(o);
+  for(const reg of ['アジア・太平洋','欧州・中東・アフリカ','米州']){ const a=by[reg]; if(!a||!a.length) continue; const avg=a.reduce((s,o)=>s+o.chg,0)/a.length; const up=a.filter(o=>o.chg>0).length, dn=a.filter(o=>o.chg<0).length;
+    const s=[...a].sort((x,y)=>y.chg-x.chg); const mood=avg>0.7?'大きく上昇':avg>0.15?'上昇':avg<-0.7?'大きく下落':avg<-0.15?'下落':'ほぼ横ばい';
+    lines.push(`${reg}：${mood}（平均 ${mkSgn(avg)}、上昇 ${up}・下落 ${dn}）${s.length>1?`。最も上昇 ${s[0].index} ${mkSgn(s[0].chg)}、最も下落 ${s[s.length-1].index} ${mkSgn(s[s.length-1].chg)}`:`（${s[0].index}）`}`); }
+  const fx=fxPairs(); const uj=fx.find(x=>x.n==='USD/JPY'), gu=fx.find(x=>x.n==='GBP/USD');
+  if(uj) lines.push(`為替：1ドル ${uj.v.toFixed(2)} 円${uj.chg!=null?`（前日比 ${uj.chg>=0?'円安':'円高'} ${Math.abs(uj.chg).toFixed(2)}%）`:''}${gu?`、1ポンド ${gu.v.toFixed(4)} ドル${gu.chg!=null?`（${gu.chg>=0?'ポンド高':'ポンド安'} ${Math.abs(gu.chg).toFixed(2)}%）`:''}`:''}`);
+  if(CRYPTO&&CRYPTO.bitcoin){ const b=CRYPTO.bitcoin; lines.push(`暗号資産：ビットコイン $${Math.round(b.usd).toLocaleString()}（24時間 ${mkSgn(b.usd_24h_change||0)}）`); }
+  if(typeof EXCH!=='undefined'){ const op=EXCH.filter(e=>exchState(e).open).map(e=>e[0].replace(/（.*/,'')); lines.push('いま取引中の市場：'+(op.length?op.join('、'):'なし（主要市場はすべて時間外）')); }
+  return lines; }
+function mktText(){ const rows=mktRows(); const fx=fxPairs(); const n=MKN?MKN.arts:[];
+  return '■ 状況\n'+mktSummary().map(x=>'・'+x).join('\n')+'\n\n■ 株価指数（前日比）\n'+rows.map(o=>`・${o.index}（${o.country}）${o.price.toLocaleString()} ${mkSgn(o.chg)}`).join('\n')+
+    '\n\n■ 為替\n'+fx.map(x=>`・${x.n} ${fxFmt(x)}${x.chg!=null?' '+mkSgn(x.chg):''}`).join('\n')+
+    (CRYPTO?'\n\n■ 暗号資産（24時間）\n'+COINS.filter(([id])=>CRYPTO[id]).map(([id,s])=>`・${s} $${CRYPTO[id].usd.toLocaleString()} ${mkSgn(CRYPTO[id].usd_24h_change||0)}`).join('\n'):'')+
+    (n.length?'\n\n■ 経済ニュースの見出し\n'+n.slice(0,15).map(a=>`・${a.title}（${a.src}）`).join('\n'):''); }
+const MKT_PROMPT='あなたは金融市場の解説者です。下は地図アプリが無料の公開データ（株価指数は最大20分遅れ、為替は日次、暗号資産、経済ニュースの見出し）から集めたものです。これだけを根拠に、日本語で「いま金融市場で何が起きているか」を5〜8行でまとめてください。地域ごとの株の流れ、為替（特に円とポンド）、目立つ動きとその背景として考えられるニュースを挙げ、データにないことは推測しないでください。投資の助言はしないでください。';
+let MKAI=null;
+async function marketPanel(){
+  selected=null; selCountry=null; drawBase();
+  $('#card').innerHTML=`<header><div class="tag" style="color:var(--c-mkt)">MARKETS · 金融市場</div><h3 class="t">いまの金融市場</h3><div class="coord">株価は最大20分遅れ · <span id="mkat">読み込み中…</span></div><button class="x" id="close" aria-label="閉じる">✕</button></header><div id="mkbody"><div class="note" style="border:0">読み込み中…</div></div>`;
+  $('#card').hidden=false; $('#close').onclick=()=>{ $('#card').hidden=true; };
+  const draw=()=>{ const el=$('#mkbody'); if(!el) return; const rows=mktRows(); const fx=fxPairs(); const n=MKN?MKN.arts:[];
+    const by={}; for(const o of rows) (by[MK_REG(o)]=by[MK_REG(o)]||[]).push(o);
+    const regH=['アジア・太平洋','欧州・中東・アフリカ','米州'].filter(r=>by[r]).map(r=>`<div class="sec"><h4>${r}</h4>${by[r].sort((a,b)=>b.chg-a.chg).map(o=>row(`${esc(o.index)} <small style="color:var(--muted)">${esc(o.country||'')}</small>`,`${o.price.toLocaleString()} ${pct(o.chg)}`)).join('')}</div>`).join('');
+    el.innerHTML=
+      `<div class="sec"><h4>まとめ（自動）</h4>${mktSummary().map(x=>`<div style="padding:3px 0;line-height:1.55">${esc(x)}</div>`).join('')||'<div class="note" style="border:0">データを読み込み中です</div>'}
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn" id="mkai">AI でまとめる</button><button class="btn" id="mkcopy">AIアプリ用にコピー</button><button class="btn" id="mkre">更新</button></div>
+        <div id="mkaiout" style="margin-top:8px;line-height:1.6;white-space:pre-wrap">${MKAI?esc(MKAI):''}</div></div>`+
+      `<div class="sec"><h4>為替${FXPREV?` <small style="color:var(--muted)">前日比は ${esc(FXPREV.date)} との比較</small>`:''}</h4>${fx.map(x=>row(x.n,`${fxFmt(x)} ${x.chg!=null?pct(x.chg):''}`)).join('')||'<div class="note" style="border:0">取得中</div>'}</div>`+
+      (CRYPTO?`<div class="sec"><h4>暗号資産（24時間）</h4>${COINS.filter(([id])=>CRYPTO[id]).map(([id,s])=>row(s,`$${CRYPTO[id].usd.toLocaleString()} ${pct(CRYPTO[id].usd_24h_change)}`)).join('')}</div>`:'')+
+      (typeof exchHTML==='function'?exchHTML():'')+regH+
+      `<div class="sec"><h4>経済ニュース</h4>${n.length?n.slice(0,15).map(a=>`<a class="art" href="${esc(a.link)}" target="_blank" rel="noopener">${esc(a.title)}<small style="display:block;color:var(--muted);font-family:var(--f-mono);font-size:10px">${esc(a.src)}${a.t?' · '+fmt(a.t):''}</small></a>`).join(''):'<div class="note" style="border:0">読み込み中…</div>'}</div>`+
+      `<div class="src">株価：Google Finance（スプレッドシート経由）· 為替：${FX?esc(FX.src):'—'}・Frankfurter · 暗号資産：CoinGecko · ニュース：BBC・Guardian・NHK（RSS）。投資の助言ではありません。</div>`;
+    $('#mkat').textContent=hhmm()+' 時点';
+    $('#mkre').onclick=async()=>{ $('#mkre').textContent='更新中…'; MKN=null; await Promise.allSettled([loadIndices(),loadFX(),loadCrypto(),loadMktNews(),loadFXPrev()]); draw(); };
+    $('#mkcopy').onclick=async()=>{ const t=MKT_PROMPT+'\n\n'+mktText(); try{ await navigator.clipboard.writeText(t); $('#mkcopy').textContent='コピーしました'; }catch(e){ $('#mkaiout').textContent=t; } };
+    $('#mkai').onclick=async()=>{ const o=$('#mkaiout'); const url=(AG_CFG.url||RELAY_URL||'').replace(/\/$/,''); o.textContent='AI がまとめています…';
+      try{ const c=new AbortController(); const tm=setTimeout(()=>c.abort(),60000);
+        const r=await fetch(url+'/ai',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({provider:AG_CFG.provider||'gemini',system:MKT_PROMPT,text:mktText()}),signal:c.signal}); clearTimeout(tm);
+        const j=await r.json(); if(!r.ok||!j.text) throw new Error(j.error||('HTTP '+r.status)); MKAI=j.text; o.textContent=j.text; }
+      catch(e){ const m=String(e.message||e); o.textContent=/API_KEY not set/.test(m)?'AI のキーがまだ中継サーバーに入っていません（G-todo の「AIのキー」）。それまでは「AIアプリ用にコピー」を押して、Gemini や Claude のアプリに貼り付けてください。':'AI でまとめられませんでした：'+m; } }; };
+  draw(); await Promise.allSettled([loadFXPrev(),loadMktNews()]); if($('#mkbody')) draw();
+}
+(function(){ const t=$('#bTrend'); if(!t||$('#bMkt')) return; const b=document.createElement('button'); b.className='tbtn'; b.id='bMkt'; b.title='金融市場でいま起きていること'; b.textContent='市場'; b.onclick=marketPanel; t.after(b); })();
+
+/* --- news mood by country, from headlines (GDELT tone is not reachable) --- */
+const TONE_NEG=new Set('war wars attack attacks attacked killed kill kills dead death deaths die dies strike strikes bomb bombing crisis flood floods flooding fire fires wildfire crash crashes protest protests violence violent shooting shot arrested arrest fraud collapse collapses warns warning threat threats fears fear sanctions conflict hostage hostages missile missiles drone drones earthquake storm injured accused scandal recession cuts slump plunge riot riots famine outbreak abuse murder terror terrorist invasion clashes clash disaster victims shortage'.split(' '));
+const TONE_POS=new Set('deal deals peace ceasefire agreement win wins won record growth rise rises boost boosts celebrate celebrates rescue rescued recovery breakthrough award agree agrees reopens reopen success hope hopes aid release released freed truce surge gains gain approve approved launch launches welcome'.split(' '));
+const TONE_JA_NEG=['死亡','死者','攻撃','戦闘','爆発','火災','地震','被害','逮捕','事故','抗議','制裁','懸念','下落','停電','洪水','不足','殺害','負傷'], TONE_JA_POS=['合意','停戦','回復','上昇','成功','受賞','解放','再開','和平','記録'];
+function toneScore(t){ const w=String(t||'').toLowerCase().match(/[a-z]+/g)||[]; let s=0; for(const x of w){ if(TONE_NEG.has(x)) s--; else if(TONE_POS.has(x)) s++; }
+  for(const k of TONE_JA_NEG) if(String(t).includes(k)) s--; for(const k of TONE_JA_POS) if(String(t).includes(k)) s++; return Math.max(-3,Math.min(3,s)); }
+async function loadToneRss(){
+  try{ const feeds=[...RSS_FEEDS.world,['NHK 国際','https://www3.nhk.or.jp/rss/news/cat6.xml','']];
+    const res=await Promise.allSettled(feeds.map(([n,u])=>rssItems(u))); const by={}; const seen=new Set();
+    for(const r of res) if(r.status==='fulfilled') for(const a of r.value){ if(seen.has(a.link)) continue; seen.add(a.link); const f=newsCountry(a.title)||newsCountry(a.desc); if(!f) continue;
+      const k=String(f.id).padStart(3,'0'); (by[k]=by[k]||{f,nm:f.properties.name,sc:[]}).sc.push(toneScore(a.title+' '+(a.desc||''))); }
+    for(const k of Object.keys(TONE)) delete TONE[k];
+    for(const [k,o] of Object.entries(by)){ if(o.sc.length<2) continue; TONE[k]={f:o.f,nm:o.nm,v:d3.mean(o.sc)*2.5,n:o.sc.length}; }
+    if(!Object.keys(TONE).length) throw new Error('empty');
+    const list=Object.values(TONE).map(t=>{ const [lon,lat]=d3.geoCentroid(t.f); return mk('tone',`ニュースの雰囲気：${t.nm} ${t.v>=0?'+':''}${t.v.toFixed(1)}`,lat,lon,{'国':t.nm,'雰囲気':`${t.v.toFixed(1)}（${toneJa(t.v)}）`,'記事数':t.n+' 件','見方':'その国について書かれた見出しの言葉（攻撃・死亡・合意・回復など）から、明るい話題か暗い話題かを簡単に判定したもの。目安です。'},{tone:t.v,key:'tn'+t.nm,srcid:'tone',srcName:'BBC・Guardian・Al Jazeera・NPR・NHK の見出し（簡易判定）',url:'https://feeds.bbci.co.uk/news/world/rss.xml'}); });
+    replaceLayer('tone',list); state.tone='live'; fetchedAt.tone=hhmm(); L.tone.src='ニュース見出しから簡易判定（BBC など）'; }
+  catch(e){ console.warn('tone rss',e); state.tone='err'; }
+  renderLayers(); drawBase(); refreshDerived(); }
+LAZY.tone=[loadToneRss,30*60e3];
+
 /* ================= batch 29: news layer from RSS (BBC / Guardian / Al Jazeera / NPR / NHK) — relay /p first, rss2json as fallback ================= */
 const RSS_FEEDS={
   world:[['BBC','https://feeds.bbci.co.uk/news/world/rss.xml',''],['Guardian','https://www.theguardian.com/world/rss',''],['Al Jazeera','https://www.aljazeera.com/xml/rss/all.xml',''],['NPR','https://feeds.npr.org/1004/rss.xml','']],
