@@ -659,7 +659,12 @@ renderLayers(); renderConvs();
 
 function stLabel(id){ const s=state[id]; if(s==='none') return ''; if(s==='idle') return '<span class="st smp">オフ</span>'; if(!s) return '<span class="st smp">見本</span>';
   return s==='live'?`<span class="st live">LIVE ${fetchedAt[id]||''}</span>`:s==='err'?'<span class="st err">取得失敗·見本</span>':'<span class="st load">取得中</span>'; }
-function badge(){ const n=Object.values(state).filter(v=>v==='live').length; $('#badge').textContent = n? `ライブ ${n}種 ＋ 見本`:'サンプルデータ'; }
+function badgeNotLive(){ return LAYERS.filter(l=>on[l.id]&&l.id!=='place'&&state[l.id]!==undefined&&state[l.id]!=='live'&&state[l.id]!=='none'); }
+function badge(){ const n=Object.values(state).filter(v=>v==='live').length; const bad=badgeNotLive(); const el=$('#badge'); if(!el) return;
+  el.textContent = !n?'サンプルデータ': bad.length?`ライブ ${n}種 ＋ 見本・取得中 ${bad.length}`:`ライブ ${n}種`;
+  el.title = bad.length?'見本・取得中のレイヤー：'+bad.map(l=>l.name).join('、'):'オンのレイヤーはすべてライブです';
+  if(!el.__bt){ el.__bt=true; el.style.cursor='pointer'; el.addEventListener('click',()=>{ const b=badgeNotLive(); const t=$('#toast'); if(!t) return;
+    t.innerHTML=b.length?'見本・取得中：'+b.map(l=>esc(l.name)+'（'+(state[l.id]==='err'?'取得失敗':state[l.id]==='load'?'取得中':state[l.id]==='idle'?'未取得':esc(state[l.id]))+'）').join('、'):'オンのレイヤーはすべてライブです'; t.hidden=false; setTimeout(()=>t.hidden=true,7000); }); } }
 const hhmm=()=>new Date().toISOString().slice(11,16)+' UTC';
 var RELAY_URL=(()=>{ const d='https://orbis-relay.poop-london.workers.dev'; try{ const c=JSON.parse(localStorage.getItem('ow_ai')||'{}'); return String(c.url||d).replace(/\/$/,''); }catch(e){ return d; } })();
 const RELAY_HOSTS=['api.gdeltproject.org','api.adsb.lol','api.jartic-open-traffic.org','tetsudo.rti-giken.jp','overpass-api.de','www.submarinecablemap.com'];
@@ -2162,14 +2167,14 @@ const SPIN={on:false,raf:0,last:0,lastSet:0,pauseUntil:0,lng:0,lat:20,sync:false
 function gmSpinStart(){ const m=GM.m3d; if(!m) return; const c=m.center||{}; SPIN.lng=isFinite(+c.lng)?+c.lng:0; SPIN.lat=Math.max(-25,Math.min(35,isFinite(+c.lat)?+c.lat:20));
   try{ m.range=16000000; m.tilt=0; m.heading=0; }catch(e){}
   if(!m.__spin){ m.__spin=true; for(const ev of ['pointerdown','wheel','touchstart','gmp-click']) m.addEventListener(ev,()=>{ SPIN.pauseUntil=Date.now()+20000; SPIN.sync=true; },{passive:true}); }
-  SPIN.on=true; SPIN.last=performance.now(); cancelAnimationFrame(SPIN.raf); SPIN.raf=requestAnimationFrame(gmSpinTick); }
+  SPIN.on=true; SPIN.stopped=false; SPIN.last=performance.now(); cancelAnimationFrame(SPIN.raf); SPIN.raf=requestAnimationFrame(gmSpinTick); }
 function gmSpinTick(t){ const m=GM.m3d; if(!SPIN.on||!m||!GM.on||GM.kind!=='3d'){ SPIN.on=false; return; }
   const dt=Math.min(200,t-SPIN.last); SPIN.last=t; SPIN.raf=requestAnimationFrame(gmSpinTick);
   if(Date.now()<SPIN.pauseUntil||document.hidden) return;
   if(SPIN.sync){ SPIN.sync=false; const c=m.center||{}; if(isFinite(+c.lng)) SPIN.lng=+c.lng; if(isFinite(+c.lat)) SPIN.lat=+c.lat; }
   if((+m.range||0)<5e6) return;            /* zoomed in: stay still */
   SPIN.lng-=dt*0.002; if(SPIN.lng<-180) SPIN.lng+=360;   /* 2°/s, about 3 minutes per turn, same direction as the real Earth */
-  if(t-SPIN.lastSet<50) return; SPIN.lastSet=t; try{ m.center={lat:SPIN.lat,lng:SPIN.lng,altitude:0}; }catch(e){} }
+  if(t-SPIN.lastSet<50) return; SPIN.lastSet=t; try{ if(m.stopCameraAnimation&&!SPIN.stopped){ SPIN.stopped=true; m.stopCameraAnimation(); } m.heading=0; m.tilt=0; m.center={lat:SPIN.lat,lng:SPIN.lng,altitude:0}; }catch(e){} }
 $('#mG2').onclick=async()=>{ await gmStart('2d'); if(GM.on) gmRemember('g2d'); }; $('#mG3').onclick=async()=>{ await gmStart('3d'); if(GM.on) gmRemember('g3d'); };
 $('#m3d').addEventListener('click',()=>gmRemember('3d')); $('#m2d').addEventListener('click',()=>gmRemember('2d'));
 var RK_ERR='';
@@ -2188,6 +2193,32 @@ setTimeout(async()=>{ await relayKeys(); let v='g3d'; try{ v=localStorage.getIte
   if(/(^|[#&])v=/.test(location.hash)) return;
   if((v==='g2d'||v==='g3d')&&gmKey()) gmStart(v==='g2d'?'2d':'3d'); else if(v==='2d'&&mode!=='2d') setMode('2d'); },600);
 if($('#gmset')) $('#gmset').onclick=gmKeyCard;
+/* ================= batch 33: more "what people talk about" in 話題 — Google Trends (UK / Japan / US), Hatena hot entries (JP), Reddit popular ================= */
+const TR2_SRC=[
+  ['gt_gb','Google トレンド（英国）・いま急上昇の検索','https://trends.google.com/trending/rss?geo=GB','gt'],
+  ['gt_jp','Google トレンド（日本）・いま急上昇の検索','https://trends.google.com/trending/rss?geo=JP','gt'],
+  ['gt_us','Google トレンド（米国）・いま急上昇の検索','https://trends.google.com/trending/rss?geo=US','gt'],
+  ['hatena','はてなブックマーク・人気エントリー（日本）','https://b.hatena.ne.jp/hotentry/all.rss','rss'],
+  ['reddit','Reddit・いま人気の投稿（世界）','https://www.reddit.com/r/popular/.rss','rss']];
+let TR2=null;
+function parseTrendRss(x,kind){ const d=new DOMParser().parseFromString(x,'text/xml'); if(d.querySelector('parsererror')) return [];
+  const items=[...d.getElementsByTagName('item'),...d.getElementsByTagName('entry')];
+  return items.slice(0,15).map(i=>{ const g=n=>{ const e=i.getElementsByTagName(n)[0]; return e?e.textContent.trim():''; };
+    let link=g('link'); if(!link){ const l=i.getElementsByTagName('link')[0]; link=l?l.getAttribute('href')||'':''; }
+    if(kind==='gt'){ const nu=g('ht:news_item_url'); const nt=g('ht:news_item_title'); return {t:g('title'),u:nu||('https://www.google.com/search?q='+encodeURIComponent(g('title'))),s:[g('ht:approx_traffic')?g('ht:approx_traffic')+' 回検索':'',nt].filter(Boolean).join(' · ')}; }
+    return {t:g('title'),u:link,s:''}; }).filter(o=>o.t); }
+async function trendFeed(url,kind){
+  if(RELAY_URL){ try{ const it=parseTrendRss(await getText1(RELAY_URL+'/p?u='+encodeURIComponent(url),20000),kind); if(it.length) return it; }catch(e){ console.warn('trend relay',url,e); } }
+  const j=await getJSON1('https://api.rss2json.com/v1/api.json?rss_url='+encodeURIComponent(url),20000); if(j.status&&j.status!=='ok') throw new Error(j.message||j.status);
+  return (j.items||[]).slice(0,15).map(i=>({t:i.title,u:kind==='gt'?'https://www.google.com/search?q='+encodeURIComponent(i.title):i.link,s:''})).filter(o=>o.t); }
+async function loadTrends2(){ if(TR2&&Date.now()-TR2.at<15*60e3) return TR2;
+  const res=await Promise.allSettled(TR2_SRC.map(([id,,u,k])=>trendFeed(u,k))); const o={at:Date.now()}; TR2_SRC.forEach(([id],i)=>{ o[id]=res[i].status==='fulfilled'?res[i].value:null; }); TR2=o; return o; }
+function tr2HTML(d){ return TR2_SRC.map(([id,title,u])=>{ const list=d[id]; if(!list||!list.length) return `<div class="sec"><h4>${title}</h4><div class="note" style="border:0">取得できませんでした</div></div>`;
+  return trSec(title,list,'出典：'+esc(new URL(u).hostname),()=>''); }).join(''); }
+(function(){ const b=$('#bTrend'); if(!b) return; b.onclick=async()=>{ const p=trendPanel(); setTimeout(async()=>{ const box=$('#trbody'); if(!box) return; const w=document.createElement('div'); w.id='tr2'; w.innerHTML='<div class="note" style="border:0">Google トレンドなどを読み込み中…</div>'; box.prepend(w);
+  const keep=new MutationObserver(()=>{ const bx=$('#trbody'); if(bx&&!$('#tr2')) bx.prepend(w); }); keep.observe($('#card'),{childList:true,subtree:true}); setTimeout(()=>keep.disconnect(),30000);
+  const d=await loadTrends2(); w.innerHTML='<div class="note" style="border:0;color:var(--muted)">X（Twitter）のトレンドは有料APIのみのため、代わりに Google の急上昇ワード・はてな・Reddit を表示しています。</div>'+tr2HTML(d); },50); await p; }; })();
+
 /* ================= batch 32: 市場 panel — what is happening in financial markets (indices by region, FX with day change, crypto, exchanges open, market news, AI summary) ================= */
 let FXPREV=null, MKN=null;
 async function loadFXPrev(){ if(FXPREV&&Date.now()-FXPREV.at<6*3600e3) return; const d=Date.now()-DAY; for(let i=0;i<4;i++){ const ds=new Date(d-i*DAY).toISOString().slice(0,10); try{ const j=await getJSON(`https://api.frankfurter.dev/v1/${ds}?from=USD`); if(j&&j.rates){ FXPREV={rates:{...j.rates,USD:1},date:j.date,at:Date.now()}; return; } }catch(e){} } }
