@@ -2095,7 +2095,8 @@ function gmBox(){ const d=document.getElementById('gmap'); d.hidden=false; retur
 function gmButtons(){ for(const [id,on0] of [['m3d',!GM.on&&mode==='3d'],['m2d',!GM.on&&mode==='2d'],['mG2',GM.on&&GM.kind==='2d'],['mG3',GM.on&&GM.kind==='3d']]){ const b=$('#'+id); if(b) b.setAttribute('aria-pressed',on0); } }
 function gmCenter(){ if(selected) return {lat:selected.lat,lng:selected.lon}; if(mode==='3d') return {lat:-rot[1],lng:-rot[0]}; return {lat:20,lng:-rot[0]}; }
 async function gmStart(kind){
-  if(!gmKey()){ gmKeyCard(); return; }
+  if(!gmKey()&&typeof relayKeys==='function'){ gmMsg('中継からキーを受け取っています…'); await relayKeys(); }
+  if(!gmKey()){ gmKeyCard(); if(typeof RK_ERR!=='undefined'&&RK_ERR) setTimeout(()=>gmMsg('キーを自動で受け取れませんでした：'+RK_ERR+'（中継 '+RELAY_URL+'）'),300); return; }
   try{ await gmLoad(); }catch(e){ gmMsg(e.message==='nokey'?'Google のキーが未設定です':'Google マップを読み込めませんでした'); return; }
   gmOff(true); const box=gmBox(); box.innerHTML=''; GM.kind=kind; GM.on=true; document.body.classList.add('gm',kind==='3d'?'gm3':'gm2');
   const c=gmCenter();
@@ -2151,12 +2152,14 @@ function gmKeyCard(){ selected=null; selCountry=null;
 const gmRemember=v=>{ try{ localStorage.setItem('ow_gmode',v); }catch(e){} };
 $('#mG2').onclick=async()=>{ await gmStart('2d'); if(GM.on) gmRemember('g2d'); }; $('#mG3').onclick=async()=>{ await gmStart('3d'); if(GM.on) gmRemember('g3d'); };
 $('#m3d').addEventListener('click',()=>gmRemember('3d')); $('#m2d').addEventListener('click',()=>gmRemember('2d'));
-async function relayKeys(){ if(!RELAY_URL) return; const c=new AbortController(); const t=setTimeout(()=>c.abort(),6000);
-  try{ const r=await fetch(RELAY_URL+'/keys',{signal:c.signal,cache:'no-store'}); if(!r.ok) return; const j=await r.json();
+var RK_ERR='';
+async function relayKeys(){ if(!RELAY_URL){ RK_ERR='中継の URL が未設定'; return; } const c=new AbortController(); const t=setTimeout(()=>c.abort(),8000);
+  try{ const r=await fetch(RELAY_URL+'/keys',{signal:c.signal,cache:'no-store'}); if(!r.ok){ let m=''; try{ m=(await r.json()).error||''; }catch(e){} RK_ERR='中継の応答 '+r.status+(m?'（'+m+'）':''); return; } const j=await r.json();
+    RK_ERR=j.gkey?'':'中継に GOOGLE_MAPS_KEY がありません';
     const had=!!aisKey();
     try{ if(j.gkey) localStorage.setItem('ow_gkey',j.gkey); if(j.aiskey) localStorage.setItem('ow_aiskey',j.aiskey); }catch(e){}
     if(j.aiskey&&!had&&!on.ship){ on.ship=true; renderLayers(); }
-  }catch(e){ console.warn('keys',e); } finally{ clearTimeout(t); } }
+  }catch(e){ console.warn('keys',e); RK_ERR='中継につながりません（'+(e.name==='AbortError'?'時間切れ':(e.message||e))+'）'; } finally{ clearTimeout(t); } }
 setTimeout(async()=>{ await relayKeys(); let v=''; try{ v=localStorage.getItem('ow_gmode')||''; }catch(e){}
   if(/(^|[#&])v=/.test(location.hash)) return;
   if((v==='g2d'||v==='g3d')&&gmKey()) gmStart(v==='g2d'?'2d':'3d'); else if(v==='2d'&&mode!=='2d') setMode('2d'); },600);
