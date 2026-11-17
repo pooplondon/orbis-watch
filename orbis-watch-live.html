@@ -104,7 +104,11 @@ dd{margin:0;font-family:var(--f-mono);font-size:12px;font-variant-numeric:tabula
 .art:hover{background:var(--panel-2);color:var(--signal)}
 /* ticker */
 .ticker{border-top:1px solid var(--line);background:var(--panel);overflow:hidden;white-space:nowrap;font-family:var(--f-mono);font-size:11px;padding-block:7px;position:relative;z-index:5}
-.ticker .track{display:inline-flex;gap:34px;padding-left:100%;animation:tick 140s linear infinite}
+.ticker .track{display:inline-flex;gap:34px;padding-left:100%;animation:tick 300s linear infinite}
+.ticker{cursor:pointer;-webkit-tap-highlight-color:transparent}
+@media (hover:hover){.ticker:hover .track{animation-play-state:paused}}
+.ticker.paused .track{animation-play-state:paused}
+.ticker.paused::after{content:'⏸ 一時停止中（タップで再開）';position:absolute;right:0;top:0;bottom:0;display:flex;align-items:center;padding:0 10px;background:var(--panel);color:var(--muted);border-left:1px solid var(--line)}
 .ticker span b{font-weight:500;margin-right:6px}
 @keyframes tick{to{transform:translateX(-100%)}}
 @media (prefers-reduced-motion:reduce){.ticker .track{animation:none;padding-left:16px}}
@@ -639,7 +643,11 @@ rt.onclick=()=>{ const c=rail.dataset.collapsed!=='true'; rail.dataset.collapsed
 function renderTicker(){
 const evts=items.filter(i=>i.t instanceof Date && !['flight','space','transport','bike','launch','aurora','net','ukgrid','amedas','jtraffic'].includes(i.layer)).sort((a,b)=>b.t-a.t).slice(0,30);
 const tick=evts.map(e=>`<span><b style="color:${L[e.layer].color}">${L[e.layer].code}</b>${esc(e.name)} <span style="color:var(--muted)">· ${fmt(e.t).slice(6)}</span></span>`).join('');
-const all=(MKT_TICK||'')+tick; $('#track').innerHTML=all+all; }
+const all=(MKT_TICK||'')+tick; const tr=$('#track'); tr.innerHTML=all+all; tickerSpeed(tr); }
+var TICK_PXS=40; /* ticker speed in pixels per second (was about 150) */
+function tickerSpeed(tr){ requestAnimationFrame(()=>{ const w=tr.scrollWidth||0; if(!w) return; const d=Math.max(60,Math.round(w/TICK_PXS));
+  const cur=parseFloat(tr.style.animationDuration)||0; if(Math.abs(cur-d)/d>0.08) tr.style.animationDuration=d+'s'; }); }
+(()=>{ const tk=document.querySelector('.ticker'); if(!tk) return; tk.addEventListener('click',()=>tk.classList.toggle('paused')); })();
 renderTicker();
 
 // clock
@@ -653,8 +661,13 @@ function stLabel(id){ const s=state[id]; if(s==='none') return ''; if(s==='idle'
   return s==='live'?`<span class="st live">LIVE ${fetchedAt[id]||''}</span>`:s==='err'?'<span class="st err">取得失敗·見本</span>':'<span class="st load">取得中</span>'; }
 function badge(){ const n=Object.values(state).filter(v=>v==='live').length; $('#badge').textContent = n? `ライブ ${n}種 ＋ 見本`:'サンプルデータ'; }
 const hhmm=()=>new Date().toISOString().slice(11,16)+' UTC';
-async function getJSON(url, ms=25000){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms);
+var RELAY_URL=(()=>{ const d='https://orbis-relay.poop-london.workers.dev'; try{ const c=JSON.parse(localStorage.getItem('ow_ai')||'{}'); return String(c.url||d).replace(/\/$/,''); }catch(e){ return d; } })();
+const RELAY_HOSTS=['api.gdeltproject.org','api.adsb.lol','api.jartic-open-traffic.org','tetsudo.rti-giken.jp','overpass-api.de','www.submarinecablemap.com'];
+async function getJSON1(url, ms){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms);
   try{ const r=await fetch(url,{signal:c.signal,cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); } finally{ clearTimeout(t); } }
+async function getJSON(url, ms=25000){ let h=''; try{ h=new URL(url).hostname; }catch(e){}
+  if(RELAY_URL&&RELAY_HOSTS.includes(h)){ try{ return await getJSON1(RELAY_URL+'/p?u='+encodeURIComponent(url),Math.max(ms,30000)); }catch(e){ console.warn('relay',h,e); } }
+  return await getJSON1(url,ms); }
 function mk(layer,name,lat,lon,info,extra){ return {id:'l'+(uid++),layer,name,lat,lon,info,live:true,...extra}; }
 function replaceLayer(layer, list, src){
   for(let i=items.length-1;i>=0;i--) if(items[i].layer===layer && (!src ? true : (items[i].srcid===src || !items[i].live))) items.splice(i,1);
@@ -2133,9 +2146,20 @@ function gmKeyCard(){ selected=null; selCountry=null;
   <div class="note" style="border:0;padding:6px 0 0">キーはこのブラウザの中だけに保存されます（チャットには貼らないでください）。キーは「https://pooplondon.github.io/*」からしか使えないように制限しておけば、ページに置いても安全です。作り方は、やることリストの「Google マップ」の項目にあります。</div></div>
   <div class="sec"><h4>2つの表示</h4><div class="agi" style="padding-left:0">Google 地図：Google の地図と航空写真の上に、このサイトの全レイヤー（航空機・地震・ニュースなど）を重ねます。</div><div class="agi" style="padding-left:0">Google 3D：Google の立体の地球（写真のような3D）です。重要な出来事（最大250件）をピンで表示し、押すとその場所まで飛んで詳細が出ます。</div></div>`;
   $('#card').hidden=false; $('#close').onclick=()=>{ $('#card').hidden=true; };
-  $('#gkeysave').onclick=()=>{ const v=$('#gkeyin').value.trim(); try{ localStorage.setItem('ow_gkey',v); }catch(e){} $('#card').hidden=true; if(v) gmStart('2d'); };
+  $('#gkeysave').onclick=()=>{ const v=$('#gkeyin').value.trim(); try{ localStorage.setItem('ow_gkey',v); }catch(e){} $('#card').hidden=true; if(v){ gmStart('2d').then(()=>{ if(GM.on) gmRemember('g2d'); }); } };
   $('#gkeydel').onclick=()=>{ try{ localStorage.removeItem('ow_gkey'); }catch(e){} gmOff(); $('#gkeyin').value=''; }; }
-$('#mG2').onclick=()=>gmStart('2d'); $('#mG3').onclick=()=>gmStart('3d');
+const gmRemember=v=>{ try{ localStorage.setItem('ow_gmode',v); }catch(e){} };
+$('#mG2').onclick=async()=>{ await gmStart('2d'); if(GM.on) gmRemember('g2d'); }; $('#mG3').onclick=async()=>{ await gmStart('3d'); if(GM.on) gmRemember('g3d'); };
+$('#m3d').addEventListener('click',()=>gmRemember('3d')); $('#m2d').addEventListener('click',()=>gmRemember('2d'));
+async function relayKeys(){ if(!RELAY_URL) return; const c=new AbortController(); const t=setTimeout(()=>c.abort(),6000);
+  try{ const r=await fetch(RELAY_URL+'/keys',{signal:c.signal,cache:'no-store'}); if(!r.ok) return; const j=await r.json();
+    const had=!!aisKey();
+    try{ if(j.gkey) localStorage.setItem('ow_gkey',j.gkey); if(j.aiskey) localStorage.setItem('ow_aiskey',j.aiskey); }catch(e){}
+    if(j.aiskey&&!had&&!on.ship){ on.ship=true; renderLayers(); }
+  }catch(e){ console.warn('keys',e); } finally{ clearTimeout(t); } }
+setTimeout(async()=>{ await relayKeys(); let v=''; try{ v=localStorage.getItem('ow_gmode')||''; }catch(e){}
+  if(/(^|[#&])v=/.test(location.hash)) return;
+  if((v==='g2d'||v==='g3d')&&gmKey()) gmStart(v==='g2d'?'2d':'3d'); else if(v==='2d'&&mode!=='2d') setMode('2d'); },600);
 if($('#gmset')) $('#gmset').onclick=gmKeyCard;
 
 /* ================= batch 21: time slider play + hourly chart + window; near me: you-are-here dot, follow, last position, recent nearby, nearby alerts ================= */
